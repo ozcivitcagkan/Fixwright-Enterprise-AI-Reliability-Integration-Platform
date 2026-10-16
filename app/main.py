@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import psycopg
@@ -8,13 +8,19 @@ import os
 app = FastAPI()
 load_dotenv()
 
-conn = psycopg.connect(
-    host=os.getenv("DB_HOST"),
-    port=os.getenv("DB_PORT"),
-    dbname=os.getenv("DB_NAME"),
-    user=os.getenv("DB_USER"),
-    password=os.getenv("DB_PASSWORD")
-)
+def get_db():
+    conn= psycopg.connect(
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT"),
+        dbname=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD")
+    )
+ 
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 @app.get("/health")
@@ -35,7 +41,9 @@ class IncidentUpdate(BaseModel):
     description: str
 
 @app.post("/incidents")
-def create_incident(incident: Incident):
+def create_incident(incident: Incident,
+                    conn = Depends(get_db)
+                    ):
 
 
     with conn.cursor() as cursor:
@@ -57,7 +65,7 @@ def create_incident(incident: Incident):
     }
 
 @app.get("/incidents", response_model=list[IncidentResponse])
-def get_incidents():
+def get_incidents(conn= Depends(get_db)):
     with conn.cursor() as cursor:
         cursor.execute(
             "SELECT id, incident_id,description FROM incidents"
@@ -75,7 +83,11 @@ def get_incidents():
 
 
 @app.put("/incidents/{incident_id}")
-def update_incident(incident_id: str, incident: IncidentUpdate):
+def update_incident(incident_id: str, 
+                    incident: IncidentUpdate,
+                    conn = Depends(get_db)
+                    ):
+
     with conn.cursor() as cursor:
         cursor.execute(
             """
@@ -101,7 +113,9 @@ def update_incident(incident_id: str, incident: IncidentUpdate):
     }
 
 @app.delete("/incidents/{incident_id}")
-def delete_incident(incident_id: str):
+def delete_incident(incident_id: str,
+                    conn= Depends(get_db)
+                    ):
     with conn.cursor() as cursor:
         cursor.execute(
             """
