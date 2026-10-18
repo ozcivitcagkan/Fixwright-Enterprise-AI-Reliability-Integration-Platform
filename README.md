@@ -1,6 +1,6 @@
-# Fixwright
+# Fixwright Enterprise AI Reliability & Integration Platform.
 
-Enterprise AI Reliability & Integration Platform.
+[![Tests](https://github.com/ozcivitcagkan/Fixwright-Enterprise-AI-Reliability-Integration-Platform/actions/workflows/tests.yml/badge.svg)](https://github.com/ozcivitcagkan/Fixwright-Enterprise-AI-Reliability-Integration-Platform/actions/workflows/tests.yml)
 
 Fixwright is an enterprise-focused platform for incident management, system integrations, reliability workflows, and AI-assisted operational automation.
 
