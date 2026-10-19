@@ -1,8 +1,12 @@
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage
 import psycopg
 import os
+
+from app.agent.graph import AnalysisResult, build_agent
+from app.agent.llm import get_chat_model
 
 
 app = FastAPI()
@@ -137,3 +141,26 @@ def delete_incident(incident_id: str,
         "message": "Incident deleted",
         "incident_id": incident_id
     }
+
+@app.post("/incidents/{incident_id}/analyze", response_model=AnalysisResult)
+def analyze_incident(incident_id: str,
+                     conn = Depends(get_db),
+                     model = Depends(get_chat_model)
+                     ):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT 1 FROM incidents WHERE incident_id = %s",
+            (incident_id,)
+        )
+        if cursor.fetchone() is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Incident not found"
+            )
+
+    graph = build_agent(model, conn)
+    result = graph.invoke(
+        {"messages": [HumanMessage(f"Analyze incident {incident_id}")]}
+    )
+
+    return result["analysis"]
