@@ -1,32 +1,36 @@
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StringConstraints
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
+from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.types import Command
 from psycopg.errors import UniqueViolation
 import psycopg
-import os
 
 from app.agent.graph import AnalysisResult, build_agent
 from app.agent.llm import get_chat_model
+from app.db import connect, connect_checkpointer_db
 
 
 app = FastAPI()
 load_dotenv()
 
 def get_db():
-    conn= psycopg.connect(
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT"),
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD")
-    )
- 
+    conn = connect()
     try:
         yield conn
+    finally:
+        conn.close()
+
+
+def get_checkpointer():
+    conn = connect_checkpointer_db()
+    try:
+        yield PostgresSaver(conn)
     finally:
         conn.close()
 
@@ -59,6 +63,19 @@ class IncidentResponse(BaseModel):
 
 class IncidentUpdate(BaseModel):
     description: Description
+
+class AnalysisPending(BaseModel):
+    thread_id: str
+    status: str
+    analysis: AnalysisResult
+
+class Decision(BaseModel):
+    approved: bool
+    comment: str | None = None
+
+class DecisionResponse(BaseModel):
+    thread_id: str
+    status: str
 
 @app.post("/incidents")
 def create_incident(incident: Incident,
@@ -163,9 +180,10 @@ def delete_incident(incident_id: str,
         "incident_id": incident_id
     }
 
-@app.post("/incidents/{incident_id}/analyze", response_model=AnalysisResult)
+@app.post("/incidents/{incident_id}/analyze", response_model=AnalysisPending)
 def analyze_incident(incident_id: str,
                      conn = Depends(get_db),
+                     checkpointer = Depends(get_checkpointer),
                      model = Depends(get_chat_model)
                      ):
     with conn.cursor() as cursor:
@@ -179,9 +197,49 @@ def analyze_incident(incident_id: str,
                 detail="Incident not found"
             )
 
-    graph = build_agent(model, conn)
+    thread_id = str(uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
+
+    graph = build_agent(model, conn, checkpointer)
     result = graph.invoke(
-        {"messages": [HumanMessage(f"Analyze incident {incident_id}")]}
+        {
+            "incident_id": incident_id,
+            "messages": [HumanMessage(f"Analyze incident {incident_id}")],
+        },
+        config,
     )
 
-    return result["analysis"]
+    return {
+        "thread_id": thread_id,
+        "status": "pending_approval",
+        "analysis": result["__interrupt__"][0].value["analysis"],
+    }
+
+@app.post("/analyses/{thread_id}/decision", response_model=DecisionResponse)
+def decide_analysis(thread_id: str,
+                    decision: Decision,
+                    conn = Depends(get_db),
+                    checkpointer = Depends(get_checkpointer),
+                    model = Depends(get_chat_model)
+                    ):
+    config = {"configurable": {"thread_id": thread_id}}
+    graph = build_agent(model, conn, checkpointer)
+
+    state = graph.get_state(config)
+    if not state.values:
+        raise HTTPException(
+            status_code=404,
+            detail="Analysis not found"
+        )
+    if state.next != ("approval",):
+        raise HTTPException(
+            status_code=409,
+            detail="Analysis already decided"
+        )
+
+    graph.invoke(Command(resume=decision.model_dump()), config)
+
+    return {
+        "thread_id": thread_id,
+        "status": "approved" if decision.approved else "rejected",
+    }
