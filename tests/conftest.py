@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -32,18 +33,13 @@ def override_get_db():
         conn.close()
 
 
+SCHEMA_PATH = Path(__file__).parent.parent / "db" / "schema.sql"
+
+
 def reset_incidents_table():
     with connect_test_db() as conn:
-        conn.execute("DROP TABLE IF EXISTS incidents")
-        conn.execute(
-            """
-            CREATE TABLE incidents (
-                id SERIAL PRIMARY KEY,
-                incident_id VARCHAR(100) NOT NULL UNIQUE,
-                description TEXT NOT NULL
-            )
-            """
-        )
+        conn.execute("DROP TABLE IF EXISTS incident_analyses, incidents")
+        conn.execute(SCHEMA_PATH.read_text())
 
 
 @pytest.fixture
