@@ -66,3 +66,19 @@ def test_create_incident_without_description_returns_422(client):
     response = client.post("/incidents", json={"incident_id": "INC-001"})
 
     assert response.status_code == 422
+    
+
+
+def test_create_duplicate_incident_returns_409(client):
+    create_incident(client)
+
+    response = create_incident(client)
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Incident already exists"}
+
+
+def test_create_incident_with_blank_description_returns_422(client):
+    response = create_incident(client, description="   ")
+
+    assert response.status_code == 422

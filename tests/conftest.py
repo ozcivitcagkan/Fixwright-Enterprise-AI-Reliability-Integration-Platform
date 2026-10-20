@@ -34,16 +34,16 @@ def override_get_db():
 
 def reset_incidents_table():
     with connect_test_db() as conn:
+        conn.execute("DROP TABLE IF EXISTS incidents")
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS incidents (
+            CREATE TABLE incidents (
                 id SERIAL PRIMARY KEY,
-                incident_id VARCHAR(100) NOT NULL,
+                incident_id VARCHAR(100) NOT NULL UNIQUE,
                 description TEXT NOT NULL
             )
             """
         )
-        conn.execute("TRUNCATE incidents RESTART IDENTITY")
 
 
 @pytest.fixture

@@ -1,7 +1,11 @@
+from typing import Annotated
+
 from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, StringConstraints
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
+from psycopg.errors import UniqueViolation
 import psycopg
 import os
 
@@ -27,14 +31,26 @@ def get_db():
         conn.close()
 
 
-@app.get("/health")
-def health():
-    return {"status" : "healthy" }
+@app.exception_handler(psycopg.OperationalError)
+def database_unavailable(request, exc):
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Database unavailable"}
+    )
 
+
+@app.get("/health")
+def health(conn = Depends(get_db)):
+    conn.execute("SELECT 1")
+    return {"status": "healthy", "database": "ok"}
+
+
+IncidentId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+Description = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 class Incident(BaseModel):
-    incident_id : str
-    description : str
+    incident_id : IncidentId
+    description : Description
 
 class IncidentResponse(BaseModel):
     id: int 
@@ -42,21 +58,26 @@ class IncidentResponse(BaseModel):
     description: str
 
 class IncidentUpdate(BaseModel):
-    description: str
+    description: Description
 
 @app.post("/incidents")
 def create_incident(incident: Incident,
                     conn = Depends(get_db)
                     ):
 
-
-    with conn.cursor() as cursor:
-        cursor.execute(
-            """ 
-                INSERT INTO incidents (incident_id, description)
-                VALUES (%s, %s)
-            """,
-            (incident.incident_id, incident.description)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """ 
+                    INSERT INTO incidents (incident_id, description)
+                    VALUES (%s, %s)
+                """,
+                (incident.incident_id, incident.description)
+            )
+    except UniqueViolation:
+        raise HTTPException(
+            status_code=409,
+            detail="Incident already exists"
         )
 
     conn.commit()
