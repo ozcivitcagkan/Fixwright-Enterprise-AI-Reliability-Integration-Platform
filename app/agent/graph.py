@@ -1,6 +1,9 @@
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.types import interrupt
+from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
 from app.agent.tools import make_tools
@@ -29,10 +32,12 @@ class AnalysisResult(BaseModel):
 
 
 class AgentState(MessagesState):
-    analysis: AnalysisResult | None
+    incident_id: str
+    analysis: dict | None
+    decision: dict | None
 
 
-def build_agent(model, conn):
+def build_agent(model, conn, checkpointer=None):
     tools = make_tools(conn)
     model_with_tools = model.bind_tools(tools)
     report_model = model.with_structured_output(AnalysisResult, method="json_schema")
@@ -52,16 +57,52 @@ def build_agent(model, conn):
             conclusion=state["messages"][-1].text,
         )
         analysis = report_model.invoke([HumanMessage(prompt)])
-        return {"analysis": analysis}
+        return {"analysis": analysis.model_dump()}
+
+    def approval(state: AgentState):
+        decision = interrupt({
+            "incident_id": state["incident_id"],
+            "analysis": state["analysis"],
+        })
+        return {"decision": decision}
+
+    def save(state: AgentState, config: RunnableConfig):
+        analysis = state["analysis"]
+        decision = state["decision"]
+
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO incident_analyses
+                    (incident_id, thread_id, status, probable_cause,
+                     suggested_steps, evidence, reviewer_comment)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    state["incident_id"],
+                    config["configurable"]["thread_id"],
+                    "approved" if decision["approved"] else "rejected",
+                    analysis["probable_cause"],
+                    Jsonb(analysis["suggested_steps"]),
+                    Jsonb(analysis["evidence"]),
+                    decision.get("comment"),
+                ),
+            )
+        conn.commit()
+        return {}
 
     builder = StateGraph(AgentState)
     builder.add_node("agent", agent)
     builder.add_node("tools", ToolNode(tools))
     builder.add_node("respond", respond)
+    builder.add_node("approval", approval)
+    builder.add_node("save", save)
 
     builder.add_edge(START, "agent")
     builder.add_conditional_edges("agent", tools_condition, {"tools": "tools", END: "respond"})
     builder.add_edge("tools", "agent")
-    builder.add_edge("respond", END)
+    builder.add_edge("respond", "approval")
+    builder.add_edge("approval", "save")
+    builder.add_edge("save", END)
 
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)

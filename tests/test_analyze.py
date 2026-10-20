@@ -36,7 +36,39 @@ def create_incident(client, incident_id, description):
     client.post("/incidents", json={"incident_id": incident_id, "description": description})
 
 
-def test_analyze_runs_tools_and_returns_analysis(client):
+def make_fake_model():
+    return FakeAgentModel(
+        messages=iter([
+            AIMessage(content="", tool_calls=[
+                tool_call("get_incident", {"incident_id": "INC-101"}, "call_1"),
+            ]),
+            AIMessage(content="INC-101 matches a known payroll database problem."),
+        ]),
+        analysis=ANALYSIS,
+    )
+
+
+def start_analysis(client):
+    create_incident(client, "INC-101", "Nightly payroll ETL job failed with a database timeout")
+    app.dependency_overrides[get_chat_model] = make_fake_model
+
+    response = client.post("/incidents/INC-101/analyze")
+
+    return response.json()["thread_id"]
+
+
+def saved_analyses(db, thread_id):
+    return db.execute(
+        """
+        SELECT status, reviewer_comment, probable_cause
+        FROM incident_analyses
+        WHERE thread_id = %s
+        """,
+        (thread_id,),
+    ).fetchall()
+
+
+def test_analyze_runs_tools_and_returns_pending_analysis(client, db):
     create_incident(client, "INC-101", "Nightly payroll ETL job failed with a database timeout")
     create_incident(client, "INC-102", "Payroll ETL job timed out; database CPU at 95 percent")
     create_incident(client, "INC-103", "Login page returns HTTP 500")
@@ -62,7 +94,11 @@ def test_analyze_runs_tools_and_returns_analysis(client):
     response = client.post("/incidents/INC-101/analyze")
 
     assert response.status_code == 200
-    assert response.json() == ANALYSIS.model_dump()
+    body = response.json()
+    assert body["status"] == "pending_approval"
+    assert body["analysis"] == ANALYSIS.model_dump()
+    assert body["thread_id"]
+    assert saved_analyses(db, body["thread_id"]) == []
 
     report_prompt = fake_model.report_prompts[0]
     search_line = next(
@@ -73,6 +109,51 @@ def test_analyze_runs_tools_and_returns_analysis(client):
     assert "INC-101" not in search_line
     assert "INC-103" not in search_line
     assert "INC-101 repeats the CPU problem" in report_prompt
+
+
+def test_approving_saves_approved_analysis(client, db):
+    thread_id = start_analysis(client)
+
+    response = client.post(f"/analyses/{thread_id}/decision", json={"approved": True})
+
+    assert response.status_code == 200
+    assert response.json() == {"thread_id": thread_id, "status": "approved"}
+    assert saved_analyses(db, thread_id) == [("approved", None, ANALYSIS.probable_cause)]
+
+
+def test_rejecting_saves_rejected_analysis_with_comment(client, db):
+    thread_id = start_analysis(client)
+
+    response = client.post(
+        f"/analyses/{thread_id}/decision",
+        json={"approved": False, "comment": "Evidence is too thin"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"thread_id": thread_id, "status": "rejected"}
+    assert saved_analyses(db, thread_id) == [
+        ("rejected", "Evidence is too thin", ANALYSIS.probable_cause)
+    ]
+
+
+def test_second_decision_returns_409(client, db):
+    thread_id = start_analysis(client)
+    client.post(f"/analyses/{thread_id}/decision", json={"approved": True})
+
+    response = client.post(f"/analyses/{thread_id}/decision", json={"approved": False})
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Analysis already decided"}
+    assert saved_analyses(db, thread_id) == [("approved", None, ANALYSIS.probable_cause)]
+
+
+def test_decision_for_unknown_thread_returns_404(client):
+    app.dependency_overrides[get_chat_model] = make_fake_model
+
+    response = client.post("/analyses/does-not-exist/decision", json={"approved": True})
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Analysis not found"}
 
 
 def test_analyze_unknown_incident_returns_404_without_calling_model(client):
