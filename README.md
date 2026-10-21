@@ -12,6 +12,7 @@ Fixwright is an enterprise-focused platform for incident management, system inte
 - AI incident analysis agent built with LangGraph and Claude (tool calling, structured output)
 - Human-in-the-loop approval: AI analyses are saved only after a person approves or rejects them
 - Durable agent state with the LangGraph Postgres checkpointer
+- API key authentication on every endpoint except the health check
 - Pydantic request and response validation
 - HTTP error handling
 - Environment-based configuration
@@ -37,16 +38,31 @@ Fixwright is an enterprise-focused platform for incident management, system inte
 
 ## Getting Started
 
-1. Start PostgreSQL in Docker and create a `.env` file with `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `ANTHROPIC_API_KEY`.
-2. Install dependencies: `pip install -r requirements.txt`
-3. Create the tables and the agent checkpoint tables (a one-time deploy step): `python -m app.db`
-4. Run the API: `uvicorn app.main:app --reload`
+1. Start PostgreSQL in Docker and create a `.env` file with `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `ANTHROPIC_API_KEY`, and `FIXWRIGHT_API_KEY`.
+2. Generate a random value for `FIXWRIGHT_API_KEY`: `python -c "import secrets; print(secrets.token_urlsafe(32))"`
+3. Install dependencies: `pip install -r requirements.txt`
+4. Create the tables and the agent checkpoint tables (a one-time deploy step): `python -m app.db`
+5. Run the API: `uvicorn app.main:app --reload`
+
+## Authentication
+
+Every endpoint except `GET /health` requires an API key in the `X-API-Key` header:
+
+```bash
+curl http://localhost:8000/incidents -H "X-API-Key: <your key>"
+```
+
+- A missing or wrong key returns `401` with a `WWW-Authenticate: APIKey` header.
+- Keys are compared in constant time (`secrets.compare_digest`) to prevent timing attacks.
+- If `FIXWRIGHT_API_KEY` is not set on the server, protected endpoints return `500` instead of opening up (fail closed).
+- `GET /health` stays public so that deployment platforms can check the service.
+- In the interactive docs (`/docs`), use the **Authorize** button to enter the key.
 
 ## API Endpoints
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/health` | Health check (also checks the database) |
+| GET | `/health` | Health check (also checks the database), public |
 | POST | `/incidents` | Create an incident |
 | GET | `/incidents` | Retrieve incidents |
 | PUT | `/incidents/{incident_id}` | Update an incident |
@@ -131,4 +147,4 @@ The platform is being developed toward an enterprise AI reliability architecture
 
 Active Development
 
-The core API, the database layer, the AI incident analysis agent, and the human approval workflow are implemented.
+The core API, the database layer, the AI incident analysis agent, the human approval workflow, and API key authentication are implemented.

@@ -13,6 +13,7 @@ import psycopg
 
 from app.agent.graph import AnalysisResult, build_agent
 from app.agent.llm import get_chat_model
+from app.auth import require_api_key
 from app.db import connect, connect_checkpointer_db
 
 
@@ -77,7 +78,7 @@ class DecisionResponse(BaseModel):
     thread_id: str
     status: str
 
-@app.post("/incidents")
+@app.post("/incidents", dependencies=[Depends(require_api_key)])
 def create_incident(incident: Incident,
                     conn = Depends(get_db)
                     ):
@@ -106,7 +107,7 @@ def create_incident(incident: Incident,
         "description": incident.description
     }
 
-@app.get("/incidents", response_model=list[IncidentResponse])
+@app.get("/incidents", response_model=list[IncidentResponse], dependencies=[Depends(require_api_key)])
 def get_incidents(conn= Depends(get_db)):
     with conn.cursor() as cursor:
         cursor.execute(
@@ -124,7 +125,7 @@ def get_incidents(conn= Depends(get_db)):
     ]
 
 
-@app.put("/incidents/{incident_id}")
+@app.put("/incidents/{incident_id}", dependencies=[Depends(require_api_key)])
 def update_incident(incident_id: str, 
                     incident: IncidentUpdate,
                     conn = Depends(get_db)
@@ -154,7 +155,7 @@ def update_incident(incident_id: str,
     "description": incident.description
     }
 
-@app.delete("/incidents/{incident_id}")
+@app.delete("/incidents/{incident_id}", dependencies=[Depends(require_api_key)])
 def delete_incident(incident_id: str,
                     conn= Depends(get_db)
                     ):
@@ -180,7 +181,7 @@ def delete_incident(incident_id: str,
         "incident_id": incident_id
     }
 
-@app.post("/incidents/{incident_id}/analyze", response_model=AnalysisPending)
+@app.post("/incidents/{incident_id}/analyze", response_model=AnalysisPending, dependencies=[Depends(require_api_key)])
 def analyze_incident(incident_id: str,
                      conn = Depends(get_db),
                      checkpointer = Depends(get_checkpointer),
@@ -215,7 +216,7 @@ def analyze_incident(incident_id: str,
         "analysis": result["__interrupt__"][0].value["analysis"],
     }
 
-@app.post("/analyses/{thread_id}/decision", response_model=DecisionResponse)
+@app.post("/analyses/{thread_id}/decision", response_model=DecisionResponse, dependencies=[Depends(require_api_key)])
 def decide_analysis(thread_id: str,
                     decision: Decision,
                     conn = Depends(get_db),
