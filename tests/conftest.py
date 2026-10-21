@@ -11,6 +11,7 @@ from app.main import app, get_checkpointer, get_db
 load_dotenv()
 
 TEST_DB_NAME = os.getenv("TEST_DB_NAME", "fixwright_test")
+TEST_API_KEY = "test-api-key"
 
 assert TEST_DB_NAME != os.getenv("DB_NAME"), "Tests must not run against the development database"
 
@@ -38,12 +39,13 @@ def reset_database():
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
     reset_database()
+    monkeypatch.setenv("FIXWRIGHT_API_KEY", TEST_API_KEY)
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_checkpointer] = override_get_checkpointer
 
-    with TestClient(app) as test_client:
+    with TestClient(app, headers={"X-API-Key": TEST_API_KEY}) as test_client:
         yield test_client
 
     app.dependency_overrides.clear()
