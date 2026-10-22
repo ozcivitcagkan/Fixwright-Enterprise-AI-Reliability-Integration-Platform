@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: fixwright
+      POSTGRES_PASSWORD: local_only_password
+      POSTGRES_DB: fixwright
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fixwright"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: fixwright
+      DB_USER: fixwright
+      DB_PASSWORD: local_only_password
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      FIXWRIGHT_API_KEY: ${FIXWRIGHT_API_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
