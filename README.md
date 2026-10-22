@@ -4,6 +4,16 @@
 
 Fixwright is an enterprise-focused platform for incident management, system integrations, reliability workflows, and AI-assisted operational automation.
 
+## Live Demo
+
+The API is deployed at **https://fixwright.onrender.com**
+
+- Interactive API docs: [fixwright.onrender.com/docs](https://fixwright.onrender.com/docs)
+- Public health check: [fixwright.onrender.com/health](https://fixwright.onrender.com/health)
+- All other endpoints require an API key in the `X-API-Key` header. A demo key is available on request.
+- Hosting: Render (Docker container, Frankfurt) with a Neon serverless PostgreSQL database. Every merge to `main` is deployed automatically.
+- The demo runs on free tiers, so the first request after 15 minutes of inactivity can take up to a minute while the service wakes up.
+
 ## Current Features
 
 - REST API built with FastAPI
