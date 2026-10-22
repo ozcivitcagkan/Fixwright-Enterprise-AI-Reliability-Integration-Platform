@@ -16,7 +16,7 @@ Fixwright is an enterprise-focused platform for incident management, system inte
 - Pydantic request and response validation
 - HTTP error handling
 - Environment-based configuration
-- Dockerized PostgreSQL
+- Docker image and Docker Compose setup (API + PostgreSQL)
 - Automated tests with pytest against a real PostgreSQL test database
 - CI with GitHub Actions on every pull request
 
@@ -43,6 +43,19 @@ Fixwright is an enterprise-focused platform for incident management, system inte
 3. Install dependencies: `pip install -r requirements.txt`
 4. Create the tables and the agent checkpoint tables (a one-time deploy step): `python -m app.db`
 5. Run the API: `uvicorn app.main:app --reload`
+
+## Run with Docker
+
+The API and PostgreSQL can run together with Docker Compose. Only `ANTHROPIC_API_KEY` and `FIXWRIGHT_API_KEY` are read from `.env`; the database settings are defined in `docker-compose.yml`.
+
+```bash
+docker compose up --build
+```
+
+- On startup, the container creates the tables (`python -m app.db`, safe to run every time) and then starts the API on port 8000.
+- The image runs as a non-root user. `.env`, tests, and local files are kept out of the image by `.dockerignore`.
+- Stop with `Ctrl+C`, then run `docker compose down`. Data stays in the `pgdata` volume.
+
 
 ## Authentication
 
