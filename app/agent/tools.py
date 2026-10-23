@@ -1,8 +1,12 @@
+import logging
+
 import httpx
 from langchain_core.tools import tool
 
 from app.config import SIMILARITY_THRESHOLD
 from app.embeddings import to_pgvector
+
+logger = logging.getLogger(__name__)
 
 
 def make_tools(conn, embeddings):
@@ -43,6 +47,7 @@ def make_tools(conn, embeddings):
         try:
             query_vector = to_pgvector(embeddings.embed_query(query))
         except httpx.HTTPError:
+            logger.warning("Similarity search failed", exc_info=True)
             return {"error": "Similarity search is unavailable right now"}
 
         with conn.cursor() as cursor:
