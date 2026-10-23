@@ -1,3 +1,4 @@
+import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
@@ -48,6 +49,33 @@ def make_fake_model():
     )
 
 
+def make_search_model():
+    return FakeAgentModel(
+        messages=iter([
+            AIMessage(content="", tool_calls=[
+                tool_call("get_incident", {"incident_id": "INC-101"}, "call_1"),
+            ]),
+            AIMessage(content="", tool_calls=[
+                tool_call(
+                    "search_similar_incidents",
+                    {"query": "payroll etl job database", "exclude_incident_id": "INC-101"},
+                    "call_2",
+                ),
+            ]),
+            AIMessage(content="INC-101 repeats the CPU problem seen in INC-102."),
+        ]),
+        analysis=ANALYSIS,
+    )
+
+
+def search_result_line(fake_model):
+    report_prompt = fake_model.report_prompts[0]
+    return next(
+        line for line in report_prompt.splitlines()
+        if line.startswith("[search_similar_incidents]")
+    )
+
+
 def start_analysis(client):
     create_incident(client, "INC-101", "Nightly payroll ETL job failed with a database timeout")
     app.dependency_overrides[get_chat_model] = make_fake_model
@@ -73,22 +101,7 @@ def test_analyze_runs_tools_and_returns_pending_analysis(client, db):
     create_incident(client, "INC-102", "Payroll ETL job timed out; database CPU at 95 percent")
     create_incident(client, "INC-103", "Login page returns HTTP 500")
 
-    fake_model = FakeAgentModel(
-        messages=iter([
-            AIMessage(content="", tool_calls=[
-                tool_call("get_incident", {"incident_id": "INC-101"}, "call_1"),
-            ]),
-            AIMessage(content="", tool_calls=[
-                tool_call(
-                    "search_similar_incidents",
-                    {"keywords": "payroll database", "exclude_incident_id": "INC-101"},
-                    "call_2",
-                ),
-            ]),
-            AIMessage(content="INC-101 repeats the CPU problem seen in INC-102."),
-        ]),
-        analysis=ANALYSIS,
-    )
+    fake_model = make_search_model()
     app.dependency_overrides[get_chat_model] = lambda: fake_model
 
     response = client.post("/incidents/INC-101/analyze")
@@ -100,15 +113,29 @@ def test_analyze_runs_tools_and_returns_pending_analysis(client, db):
     assert body["thread_id"]
     assert saved_analyses(db, body["thread_id"]) == []
 
-    report_prompt = fake_model.report_prompts[0]
-    search_line = next(
-        line for line in report_prompt.splitlines()
-        if line.startswith("[search_similar_incidents]")
-    )
+    search_line = search_result_line(fake_model)
     assert "INC-102" in search_line
     assert "INC-101" not in search_line
     assert "INC-103" not in search_line
-    assert "INC-101 repeats the CPU problem" in report_prompt
+    assert "INC-101 repeats the CPU problem" in fake_model.report_prompts[0]
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_search_shows_only_approved_analyses_of_similar_incidents(client, approved):
+    create_incident(client, "INC-101", "Nightly payroll ETL job failed with a database timeout")
+    create_incident(client, "INC-102", "Payroll ETL job timed out; database CPU at 95 percent")
+
+    app.dependency_overrides[get_chat_model] = make_fake_model
+    thread_id = client.post("/incidents/INC-102/analyze").json()["thread_id"]
+    client.post(f"/analyses/{thread_id}/decision", json={"approved": approved})
+
+    fake_model = make_search_model()
+    app.dependency_overrides[get_chat_model] = lambda: fake_model
+    client.post("/incidents/INC-101/analyze")
+
+    search_line = search_result_line(fake_model)
+    assert "INC-102" in search_line
+    assert (ANALYSIS.probable_cause in search_line) == approved
 
 
 def test_approving_saves_approved_analysis(client, db):

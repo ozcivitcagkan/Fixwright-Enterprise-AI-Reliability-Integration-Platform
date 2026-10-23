@@ -1,7 +1,11 @@
+import httpx
 from langchain_core.tools import tool
 
+from app.config import SIMILARITY_THRESHOLD
+from app.embeddings import to_pgvector
 
-def make_tools(conn):
+
+def make_tools(conn, embeddings):
     @tool
     def get_incident(incident_id: str) -> dict:
         """Fetch a single incident by its incident_id, for example INC-101.
@@ -26,36 +30,64 @@ def make_tools(conn):
 
     @tool
     def search_similar_incidents(
-        keywords: str,
+        query: str,
         exclude_incident_id: str | None = None,
         limit: int = 5,
-    ) -> list[dict]:
-        """Find past incidents whose description contains any of the given keywords.
-        Pass a few space-separated keywords, for example "database timeout payroll".
-        Use exclude_incident_id to leave out the incident you are analyzing."""
-        words = [word for word in keywords.lower().split() if len(word) >= 3]
-        if not words:
-            return []
-
-        patterns = [f"%{word}%" for word in words]
-        sql = """
-            SELECT incident_id, description
-            FROM incidents
-            WHERE description ILIKE ANY(%s)
-        """
-        params = [patterns]
-
-        if exclude_incident_id:
-            sql += " AND incident_id <> %s"
-            params.append(exclude_incident_id)
-
-        sql += " ORDER BY id DESC LIMIT %s"
-        params.append(min(limit, 10))
+    ) -> list[dict] | dict:
+        """Find past incidents that mean something similar to the query, even when
+        they use different words. Pass a short description of the problem, for example
+        "payroll job fails because the database is slow". Use exclude_incident_id to
+        leave out the incident you are analyzing. Each result has a similarity score
+        from 0 to 1 and, if a person approved an analysis for that incident, its
+        probable cause and suggested steps."""
+        try:
+            query_vector = to_pgvector(embeddings.embed_query(query))
+        except httpx.HTTPError:
+            return {"error": "Similarity search is unavailable right now"}
 
         with conn.cursor() as cursor:
-            cursor.execute(sql, params)
+            cursor.execute(
+                """
+                SELECT i.incident_id,
+                       i.description,
+                       1 - (i.embedding <=> %(query)s::vector) AS similarity,
+                       a.probable_cause,
+                       a.suggested_steps
+                FROM incidents i
+                LEFT JOIN LATERAL (
+                    SELECT probable_cause, suggested_steps
+                    FROM incident_analyses
+                    WHERE incident_id = i.incident_id AND status = 'approved'
+                    ORDER BY reviewed_at DESC
+                    LIMIT 1
+                ) a ON true
+                WHERE i.embedding IS NOT NULL
+                  AND i.incident_id IS DISTINCT FROM %(exclude)s
+                  AND 1 - (i.embedding <=> %(query)s::vector) >= %(threshold)s
+                ORDER BY i.embedding <=> %(query)s::vector
+                LIMIT %(limit)s
+                """,
+                {
+                    "query": query_vector,
+                    "exclude": exclude_incident_id,
+                    "threshold": SIMILARITY_THRESHOLD,
+                    "limit": min(limit, 10),
+                },
+            )
             rows = cursor.fetchall()
 
-        return [{"incident_id": row[0], "description": row[1]} for row in rows]
+        return [
+            {
+                "incident_id": incident_id,
+                "description": description,
+                "similarity": round(similarity, 3),
+                "approved_analysis": (
+                    {"probable_cause": probable_cause, "suggested_steps": suggested_steps}
+                    if probable_cause is not None
+                    else None
+                ),
+            }
+            for incident_id, description, similarity, probable_cause, suggested_steps in rows
+        ]
 
     return [get_incident, search_similar_incidents]

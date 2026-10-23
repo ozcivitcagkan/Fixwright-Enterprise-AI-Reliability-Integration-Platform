@@ -10,9 +10,12 @@ from app.agent.tools import make_tools
 
 SYSTEM_PROMPT = """You are an incident analyst for an enterprise IT support team.
 To investigate an incident, first call get_incident to read it. Then call
-search_similar_incidents with a few keywords from its description to find related
-past incidents, excluding the incident itself. Base your conclusion only on what
-the tools return, and say so when the evidence is thin."""
+search_similar_incidents with a short description of the problem in your own words
+to find related past incidents, excluding the incident itself. Results are ranked by
+meaning and include a similarity score from 0 to 1. When a result has an approved
+analysis, a person has already confirmed that cause and those steps for a similar
+incident, so give it more weight than an unreviewed description. Base your
+conclusion only on what the tools return, and say so when the evidence is thin."""
 
 REPORT_PROMPT = """Below are the results of an incident investigation.
 
@@ -37,8 +40,8 @@ class AgentState(MessagesState):
     decision: dict | None
 
 
-def build_agent(model, conn, checkpointer=None):
-    tools = make_tools(conn)
+def build_agent(model, conn, embeddings, checkpointer=None):
+    tools = make_tools(conn, embeddings)
     model_with_tools = model.bind_tools(tools)
     report_model = model.with_structured_output(AnalysisResult, method="json_schema")
 

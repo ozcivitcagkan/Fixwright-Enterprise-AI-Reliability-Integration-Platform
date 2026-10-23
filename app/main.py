@@ -192,7 +192,8 @@ def delete_incident(incident_id: str,
 def analyze_incident(incident_id: str,
                      conn = Depends(get_db),
                      checkpointer = Depends(get_checkpointer),
-                     model = Depends(get_chat_model)
+                     model = Depends(get_chat_model),
+                     embeddings = Depends(get_embeddings)
                      ):
     with conn.cursor() as cursor:
         cursor.execute(
@@ -208,7 +209,7 @@ def analyze_incident(incident_id: str,
     thread_id = str(uuid4())
     config = {"configurable": {"thread_id": thread_id}}
 
-    graph = build_agent(model, conn, checkpointer)
+    graph = build_agent(model, conn, embeddings, checkpointer)
     result = graph.invoke(
         {
             "incident_id": incident_id,
@@ -228,10 +229,11 @@ def decide_analysis(thread_id: str,
                     decision: Decision,
                     conn = Depends(get_db),
                     checkpointer = Depends(get_checkpointer),
-                    model = Depends(get_chat_model)
+                    model = Depends(get_chat_model),
+                    embeddings = Depends(get_embeddings)
                     ):
     config = {"configurable": {"thread_id": thread_id}}
-    graph = build_agent(model, conn, checkpointer)
+    graph = build_agent(model, conn, embeddings, checkpointer)
 
     state = graph.get_state(config)
     if not state.values:
