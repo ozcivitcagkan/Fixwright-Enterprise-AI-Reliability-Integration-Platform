@@ -74,3 +74,8 @@ def client(monkeypatch):
 def db():
     with connect(TEST_DB_NAME, autocommit=True) as conn:
         yield conn
+
+
+@pytest.fixture
+def fake_embeddings():
+    return FakeEmbeddings()

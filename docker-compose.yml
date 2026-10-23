@@ -25,6 +25,7 @@ services:
       DB_PASSWORD: local_only_password
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       FIXWRIGHT_API_KEY: ${FIXWRIGHT_API_KEY}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY}
     depends_on:
       db:
         condition: service_healthy
