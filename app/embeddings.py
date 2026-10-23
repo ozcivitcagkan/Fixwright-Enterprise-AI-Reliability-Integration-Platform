@@ -1,3 +1,4 @@
+import logging
 import os
 
 import httpx
@@ -6,6 +7,8 @@ from langchain_core.embeddings import Embeddings
 from app.config import EMBEDDING_DIMENSIONS, EMBEDDING_MODEL_ID
 
 VOYAGE_EMBEDDINGS_URL = "https://api.voyageai.com/v1/embeddings"
+
+logger = logging.getLogger(__name__)
 
 
 class VoyageEmbeddings(Embeddings):
@@ -41,3 +44,18 @@ def get_embeddings() -> Embeddings:
     if not api_key:
         raise RuntimeError("VOYAGE_API_KEY is not set")
     return VoyageEmbeddings(api_key)
+
+
+def to_pgvector(vector: list[float]) -> str:
+    return "[" + ",".join(str(value) for value in vector) + "]"
+
+
+def embed_for_storage(embeddings: Embeddings, text: str) -> str | None:
+    """Returns the text's vector in pgvector format, or None if Voyage is unavailable.
+    The incident is saved either way; missing vectors can be filled in later."""
+    try:
+        vector = embeddings.embed_documents([text])[0]
+    except httpx.HTTPError:
+        logger.warning("Embedding failed, saving without a vector", exc_info=True)
+        return None
+    return to_pgvector(vector)

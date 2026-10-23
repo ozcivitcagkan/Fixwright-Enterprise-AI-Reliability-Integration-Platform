@@ -15,6 +15,7 @@ from app.agent.graph import AnalysisResult, build_agent
 from app.agent.llm import get_chat_model
 from app.auth import require_api_key
 from app.db import connect, connect_checkpointer_db
+from app.embeddings import embed_for_storage, get_embeddings
 
 
 app = FastAPI()
@@ -80,17 +81,20 @@ class DecisionResponse(BaseModel):
 
 @app.post("/incidents", dependencies=[Depends(require_api_key)])
 def create_incident(incident: Incident,
-                    conn = Depends(get_db)
+                    conn = Depends(get_db),
+                    embeddings = Depends(get_embeddings)
                     ):
+
+    embedding = embed_for_storage(embeddings, incident.description)
 
     try:
         with conn.cursor() as cursor:
             cursor.execute(
                 """ 
-                    INSERT INTO incidents (incident_id, description)
-                    VALUES (%s, %s)
+                    INSERT INTO incidents (incident_id, description, embedding)
+                    VALUES (%s, %s, %s::vector)
                 """,
-                (incident.incident_id, incident.description)
+                (incident.incident_id, incident.description, embedding)
             )
     except UniqueViolation:
         raise HTTPException(
@@ -128,17 +132,20 @@ def get_incidents(conn= Depends(get_db)):
 @app.put("/incidents/{incident_id}", dependencies=[Depends(require_api_key)])
 def update_incident(incident_id: str, 
                     incident: IncidentUpdate,
-                    conn = Depends(get_db)
+                    conn = Depends(get_db),
+                    embeddings = Depends(get_embeddings)
                     ):
+
+    embedding = embed_for_storage(embeddings, incident.description)
 
     with conn.cursor() as cursor:
         cursor.execute(
             """
             UPDATE incidents
-            SET description= %s
+            SET description= %s, embedding= %s::vector
             WHERE incident_id= %s
             """,
-            (incident.description,incident_id)
+            (incident.description, embedding, incident_id)
         )
 
         if cursor.rowcount == 0:
