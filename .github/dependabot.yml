@@ -1,0 +1,50 @@
+# Dependabot opens weekly PRs for outdated dependencies.
+# Every PR runs the "test" workflow before it can be merged.
+version: 2
+
+updates:
+  # Python packages in requirements.txt
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      timezone: "Europe/Istanbul"
+    # Wait 7 days after a release before proposing it (supply chain safety)
+    cooldown:
+      default-days: 7
+    # Minor and patch updates come as one PR; major updates come one by one
+    groups:
+      python-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 5
+
+  # Base image in the Dockerfile
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      timezone: "Europe/Istanbul"
+    ignore:
+      # Python version upgrades are done by hand, together with the CI workflow
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  # Actions used in .github/workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      timezone: "Europe/Istanbul"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
