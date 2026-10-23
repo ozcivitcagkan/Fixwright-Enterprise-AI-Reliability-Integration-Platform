@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16
+    image: pgvector/pgvector:pg16-trixie
     environment:
       POSTGRES_USER: fixwright
       POSTGRES_PASSWORD: local_only_password

@@ -1,8 +1,18 @@
+CREATE EXTENSION IF NOT EXISTS vector;
+
 CREATE TABLE IF NOT EXISTS incidents (
     id SERIAL PRIMARY KEY,
     incident_id VARCHAR(100) NOT NULL UNIQUE,
-    description TEXT NOT NULL
+    description TEXT NOT NULL,
+    embedding vector(1024)
 );
+
+-- Databases created before the RAG phase (dev, Neon) already have the table,
+-- so CREATE TABLE IF NOT EXISTS above does not add the column there.
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS embedding vector(1024);
+
+CREATE INDEX IF NOT EXISTS incidents_embedding_idx
+    ON incidents USING hnsw (embedding vector_cosine_ops);
 
 CREATE TABLE IF NOT EXISTS incident_analyses (
     id SERIAL PRIMARY KEY,

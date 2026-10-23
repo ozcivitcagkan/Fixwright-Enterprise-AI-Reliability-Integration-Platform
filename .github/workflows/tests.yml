@@ -11,7 +11,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16-trixie
         env:
           POSTGRES_USER: fixwright
           POSTGRES_PASSWORD: ci_only_password
