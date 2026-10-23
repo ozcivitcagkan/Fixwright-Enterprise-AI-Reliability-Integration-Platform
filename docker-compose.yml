@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16
+    image: pgvector/pgvector:pg16-trixie
     environment:
       POSTGRES_USER: fixwright
       POSTGRES_PASSWORD: local_only_password
@@ -25,6 +25,7 @@ services:
       DB_PASSWORD: local_only_password
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       FIXWRIGHT_API_KEY: ${FIXWRIGHT_API_KEY}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY}
     depends_on:
       db:
         condition: service_healthy
