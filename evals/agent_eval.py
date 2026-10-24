@@ -3,8 +3,10 @@ result: did it search, cite the right past incidents, reuse approved analyses, k
 rejected ones out, and stay grounded in what the tools returned. Calls Anthropic and
 Voyage AI, so it is not part of the test suite or CI.
 
-Run: python -m evals.agent_eval
+Run: python -m evals.agent_eval            (each scenario once)
+     python -m evals.agent_eval --runs 3   (each scenario three times, to see model variance)
 """
+import argparse
 import json
 import os
 
@@ -109,6 +111,10 @@ def check(case, analysis, tool_messages, verdict):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Evaluate the incident analysis agent")
+    parser.add_argument("--runs", type=int, default=1, help="How many times to run each scenario")
+    args = parser.parse_args()
+
     incidents = json.loads((EVAL_DIR / "incidents.json").read_text())
     reviewed = json.loads((EVAL_DIR / "reviewed_analyses.json").read_text())
     cases = json.loads((EVAL_DIR / "agent_cases.json").read_text())
@@ -116,33 +122,42 @@ def main():
     judge = get_chat_model().with_structured_output(Verdict, method="json_schema")
 
     ensure_database()
-    all_checks = []
+    results = []
     with connect(EVAL_DB_NAME) as conn:
         load_corpus(conn, embeddings, incidents)
         add_reviewed_analyses(conn, reviewed)
 
-        for case in cases:
-            analysis, tool_messages = run_case(conn, embeddings, case)
-            findings = "\n".join(f"[{message.name}] {message.content}" for message in tool_messages)
-            verdict = judge.invoke([HumanMessage(JUDGE_PROMPT.format(
-                findings=findings,
-                analysis=json.dumps(analysis, indent=2),
-            ))])
-            checks = check(case, analysis, tool_messages, verdict)
-            all_checks.append(checks)
+        for run in range(1, args.runs + 1):
+            for case in cases:
+                analysis, tool_messages = run_case(conn, embeddings, case)
+                findings = "\n".join(f"[{message.name}] {message.content}" for message in tool_messages)
+                verdict = judge.invoke([HumanMessage(JUDGE_PROMPT.format(
+                    findings=findings,
+                    analysis=json.dumps(analysis, indent=2),
+                ))])
+                checks = check(case, analysis, tool_messages, verdict)
+                results.append((case["incident_id"], checks))
 
-            print(f"\n{case['incident_id']}: {case['description']}")
-            print(f"  cause: {analysis['probable_cause']}")
-            for name, passed in checks.items():
-                print(f"  {'PASS' if passed else 'FAIL'}  {name}")
-            print(f"  judge: {verdict.reason}")
+                failed = [name for name, passed in checks.items() if not passed]
+                print(f"\nRun {run}, {case['incident_id']}: {case['description']}")
+                print(f"  cause: {analysis['probable_cause']}")
+                print(f"  {'all checks passed' if not failed else 'FAILED: ' + ', '.join(failed)}")
+                print(f"  judge: {verdict.reason}")
 
-    print("\nSummary:")
-    for name in all_checks[0]:
-        passed = sum(checks[name] for checks in all_checks)
-        print(f"  {name:<15} {passed}/{len(all_checks)}")
-    total = sum(sum(checks.values()) for checks in all_checks)
-    print(f"  {'all checks':<15} {total}/{len(all_checks) * len(all_checks[0])}")
+    check_names = list(results[0][1])
+    print(f"\nSummary over {args.runs} run(s):")
+    for name in check_names:
+        passed = sum(checks[name] for _, checks in results)
+        print(f"  {name:<15} {passed}/{len(results)}")
+
+    print("\nRuns with every check passed, per scenario:")
+    for case in cases:
+        case_results = [checks for incident_id, checks in results if incident_id == case["incident_id"]]
+        clean_runs = sum(all(checks.values()) for checks in case_results)
+        print(f"  {case['incident_id']}  {clean_runs}/{len(case_results)}")
+
+    total = sum(sum(checks.values()) for _, checks in results)
+    print(f"\nAll checks: {total}/{len(results) * len(check_names)}")
 
 
 if __name__ == "__main__":

@@ -239,7 +239,7 @@ Results with voyage-4:
 `evals/agent_eval.py` runs the full agent with the real model on four scenarios and grades each analysis. Past reviewed analyses come from `evals/reviewed_analyses.json` (two approved, one rejected) and the scenarios from `evals/agent_cases.json`.
 
 ```bash
-python -m evals.agent_eval
+python -m evals.agent_eval --runs 3
 ```
 
 Each analysis is graded with code checks and an LLM judge:
@@ -250,13 +250,13 @@ Each analysis is graded with code checks and an LLM judge:
 - **no forbidden**: nothing from a rejected analysis appears, and no past incident is cited when none is related.
 - **grounded**: a separate model call (LLM-as-judge) checks that every claim is supported by the tool results and that guesses are marked as unconfirmed.
 
-Latest run: 20/20 checks passed.
+Latest run with `--runs 3` (each scenario three times): 60/60 checks passed, and every scenario passed all checks in 3 of 3 runs. The wording of the analyses changed from run to run, but the behavior did not, which is why the checks look at behavior and not at exact text.
 
 - Reused approved causes ("statistics update job", "old load balancer") while marking them as unconfirmed for the new incident.
 - The cause from the rejected analysis ("botnet") never appeared.
 - For a printer problem with no related history, the agent said the cause cannot be determined and labeled general troubleshooting ideas as such.
 
-Limitations: four scenarios and a single run, so model variance is not measured yet, and the judge is the same model as the agent.
+Limitations: four scenarios is a small set, and the judge is the same model as the agent.
 
 ## Architecture Roadmap
 
