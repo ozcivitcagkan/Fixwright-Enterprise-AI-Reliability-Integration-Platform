@@ -1,6 +1,10 @@
 import os
 import zlib
 
+# Must run before the app imports below: app.db calls load_dotenv(), which would
+# otherwise turn on LangSmith tracing from .env and send fake test runs to LangSmith.
+os.environ["LANGSMITH_TRACING"] = "false"
+
 import pytest
 from dotenv import load_dotenv
 from fastapi.testclient import TestClient

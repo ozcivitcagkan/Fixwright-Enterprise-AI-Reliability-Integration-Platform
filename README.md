@@ -44,6 +44,7 @@ The API is deployed at **https://fixwright.onrender.com**
 - LangChain (langchain-anthropic)
 - Anthropic Claude (Haiku 5.5)
 - Voyage AI embeddings (voyage-4)
+- LangSmith (tracing)
 - pytest
 - Docker
 - GitHub Actions
@@ -190,6 +191,23 @@ Configuration:
 
 - `VOYAGE_API_KEY` must be set in `.env` (never committed).
 - The embedding model, vector size, and similarity threshold live in `app/config.py`. The vector size must match `vector(1024)` in `db/schema.sql`.
+
+## Observability (LangSmith Tracing)
+
+Every agent run can be traced in LangSmith: each model call and tool call with its inputs and outputs, token usage, cost, and latency.
+
+- Tracing is turned on with environment variables only. LangChain and LangGraph send the traces automatically, so there is no tracing code in the agent:
+
+  ```
+  LANGSMITH_TRACING=true
+  LANGSMITH_API_KEY=<your key>
+  LANGSMITH_PROJECT=fixwright-local
+  ```
+
+- Each run is named (`analyze_incident`, `decide_analysis`), tagged, and carries the `incident_id` as metadata, so all runs for one incident can be filtered.
+- The test suite forces `LANGSMITH_TRACING=false`, so test runs with the fake model never reach LangSmith.
+
+Example from one local analysis of INC-105: 4 model calls, 2 tool calls, about 10.8 seconds, about 6.8K tokens, and about $0.0013. The trace showed that the agent rephrased the incident before searching ("Overnight salary batch job did not finish because the database stopped responding") and that most of the time is spent in the last two model calls, which write the conclusion and then turn it into the structured report. Merging them is a candidate optimization.
 
 ## Architecture Roadmap
 
