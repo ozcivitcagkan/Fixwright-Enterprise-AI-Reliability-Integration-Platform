@@ -1,0 +1,14 @@
+[
+  {"incident_id": "AG-01",
+   "description": "Salary batch did not finish overnight because the DB stopped answering",
+   "expected_ids": ["EV-02"], "required_phrases": ["statistics"], "forbidden_phrases": []},
+  {"incident_id": "AG-02",
+   "description": "Browser warns that the site is not secure since this morning; the certificate seems out of date",
+   "expected_ids": ["EV-05"], "required_phrases": ["load balancer"], "forbidden_phrases": []},
+  {"incident_id": "AG-03",
+   "description": "Employees are locked out of their accounts after the new password rules",
+   "expected_ids": ["EV-15"], "required_phrases": [], "forbidden_phrases": ["botnet"]},
+  {"incident_id": "AG-04",
+   "description": "Printer on the third floor prints blank pages",
+   "expected_ids": [], "required_phrases": [], "forbidden_phrases": ["EV-"]}
+]

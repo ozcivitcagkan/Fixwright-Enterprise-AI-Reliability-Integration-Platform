@@ -1,0 +1,11 @@
+[
+  {"incident_id": "EV-02", "status": "approved",
+   "probable_cause": "The payroll export overlapped with the weekly statistics update job, which saturated the SQL Server CPU.",
+   "suggested_steps": ["Move the statistics update job out of the payroll window", "Alert when CPU stays above 90 percent for 10 minutes"]},
+  {"incident_id": "EV-05", "status": "approved",
+   "probable_cause": "The certificate renewal task was still scheduled on the old load balancer, so the new one never received the renewed certificate.",
+   "suggested_steps": ["Move the renewal task to the new load balancer", "Alert 30 days before any certificate expires"]},
+  {"incident_id": "EV-15", "status": "rejected",
+   "probable_cause": "A botnet is running a brute force attack against employee accounts.",
+   "suggested_steps": ["Block the attacking IP ranges"]}
+]
