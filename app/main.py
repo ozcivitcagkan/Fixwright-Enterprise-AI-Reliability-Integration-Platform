@@ -207,7 +207,13 @@ def analyze_incident(incident_id: str,
             )
 
     thread_id = str(uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {
+        "configurable": {"thread_id": thread_id},
+        # Shown in LangSmith traces so runs can be found by incident
+        "run_name": "analyze_incident",
+        "tags": ["analyze"],
+        "metadata": {"incident_id": incident_id},
+    }
 
     graph = build_agent(model, conn, embeddings, checkpointer)
     result = graph.invoke(
@@ -247,7 +253,18 @@ def decide_analysis(thread_id: str,
             detail="Analysis already decided"
         )
 
-    graph.invoke(Command(resume=decision.model_dump()), config)
+    graph.invoke(
+        Command(resume=decision.model_dump()),
+        {
+            **config,
+            "run_name": "decide_analysis",
+            "tags": ["decision"],
+            "metadata": {
+                "incident_id": state.values["incident_id"],
+                "approved": decision.approved,
+            },
+        },
+    )
 
     return {
         "thread_id": thread_id,
