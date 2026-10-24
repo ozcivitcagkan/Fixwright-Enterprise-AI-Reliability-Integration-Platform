@@ -234,6 +234,29 @@ Results with voyage-4:
 - For both unrelated queries (a printer problem and a warehouse scanner problem), nothing is returned at 0.45.
 - The set is small and the threshold was tuned on it, so the numbers are optimistic. The set should grow with real incidents and the threshold should be measured again.
 
+### Agent analysis
+
+`evals/agent_eval.py` runs the full agent with the real model on four scenarios and grades each analysis. Past reviewed analyses come from `evals/reviewed_analyses.json` (two approved, one rejected) and the scenarios from `evals/agent_cases.json`.
+
+```bash
+python -m evals.agent_eval
+```
+
+Each analysis is graded with code checks and an LLM judge:
+
+- **searched**: the agent called both `get_incident` and `search_similar_incidents`.
+- **cited expected**: the expected past incidents appear in the evidence.
+- **used approved**: the cause from a matching approved analysis is reused.
+- **no forbidden**: nothing from a rejected analysis appears, and no past incident is cited when none is related.
+- **grounded**: a separate model call (LLM-as-judge) checks that every claim is supported by the tool results and that guesses are marked as unconfirmed.
+
+Latest run: 20/20 checks passed.
+
+- Reused approved causes ("statistics update job", "old load balancer") while marking them as unconfirmed for the new incident.
+- The cause from the rejected analysis ("botnet") never appeared.
+- For a printer problem with no related history, the agent said the cause cannot be determined and labeled general troubleshooting ideas as such.
+
+Limitations: four scenarios and a single run, so model variance is not measured yet, and the judge is the same model as the agent.
 
 ## Architecture Roadmap
 
