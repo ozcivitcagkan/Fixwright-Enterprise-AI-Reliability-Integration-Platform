@@ -1,0 +1,18 @@
+[
+  {"incident_id": "EV-01", "description": "Nightly payroll ETL job failed with a database timeout after 30 minutes"},
+  {"incident_id": "EV-02", "description": "Payroll export stalled at 03:00; SQL Server CPU stayed at 100 percent until the job was killed"},
+  {"incident_id": "EV-03", "description": "Month-end invoice batch aborted because of lock waits on the orders table"},
+  {"incident_id": "EV-04", "description": "Reporting dashboard queries time out while the nightly index rebuild is running"},
+  {"incident_id": "EV-05", "description": "Customer portal shows 'Your connection is not private' after the SSL certificate expired"},
+  {"incident_id": "EV-06", "description": "API calls from the ERP connector fail with a TLS handshake error after the certificate was renewed"},
+  {"incident_id": "EV-07", "description": "Mobile app cannot reach the backend because the intermediate certificate is missing from the chain"},
+  {"incident_id": "EV-08", "description": "File server ran out of disk space and users cannot save documents"},
+  {"incident_id": "EV-09", "description": "Database transaction log filled the drive and writes stopped"},
+  {"incident_id": "EV-10", "description": "Backup job failed because the backup volume is full"},
+  {"incident_id": "EV-11", "description": "Remote employees cannot connect to the VPN after the firewall update"},
+  {"incident_id": "EV-12", "description": "Internal hostnames do not resolve because the DNS server is down"},
+  {"incident_id": "EV-13", "description": "Branch office has packet loss and very slow access to head office systems"},
+  {"incident_id": "EV-14", "description": "Users cannot log in with single sign-on; the identity provider returns an invalid SAML response"},
+  {"incident_id": "EV-15", "description": "Accounts are locked out after the password policy change"},
+  {"incident_id": "EV-16", "description": "Login page returns HTTP 500 after the session store was migrated"}
+]

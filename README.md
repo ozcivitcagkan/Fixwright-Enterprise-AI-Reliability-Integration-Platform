@@ -166,7 +166,7 @@ Keyword search misses incidents that describe the same problem in different word
 1. When an incident is created or updated, its description is turned into a 1024-number vector (embedding) with Voyage AI and stored in the `incidents.embedding` column (pgvector, HNSW index with cosine distance).
 2. During an analysis, the agent describes the problem in its own words. The tool embeds that query and asks PostgreSQL for the nearest incidents.
 3. Each result includes a similarity score (0 to 1) and, if a person approved an analysis for that incident, its probable cause and suggested steps. Rejected analyses are never returned.
-4. Results below a similarity threshold (`SIMILARITY_THRESHOLD` in `app/config.py`, currently 0.4) are left out, so the agent does not see unrelated incidents. The threshold is a starting value that will be tuned with evaluations.
+4. Results below a similarity threshold (`SIMILARITY_THRESHOLD` in `app/config.py`, currently 0.45) are left out, so the agent does not see unrelated incidents. The threshold was chosen with the retrieval evaluation described in the Evaluation section.
 
 Example from a local run with the real models. The new incident shares almost no words with the old ones:
 
@@ -208,6 +208,32 @@ Every agent run can be traced in LangSmith: each model call and tool call with i
 - The test suite forces `LANGSMITH_TRACING=false`, so test runs with the fake model never reach LangSmith.
 
 Example from one local analysis of INC-105: 4 model calls, 2 tool calls, about 10.8 seconds, about 6.8K tokens, and about $0.0013. The trace showed that the agent rephrased the incident before searching ("Overnight salary batch job did not finish because the database stopped responding") and that most of the time is spent in the last two model calls, which write the conclusion and then turn it into the structured report. Merging them is a candidate optimization.
+
+## Evaluation
+
+### Similar incident search
+
+`evals/retrieval_eval.py` measures whether the search finds the right past incidents and which similarity threshold works best. It loads 16 labeled incidents (`evals/incidents.json`) into a separate `fixwright_eval` database, searches with 10 new incident descriptions written in different words (`evals/retrieval_cases.json`), and compares the results with the expected incidents. Two of the queries have no related incident, so the right answer for them is to return nothing.
+
+```bash
+python -m evals.retrieval_eval
+```
+
+It calls Voyage AI, so it runs on demand and is not part of the test suite or CI.
+
+Results with voyage-4:
+
+| Threshold | Precision | Recall | F1 |
+|---|---|---|---|
+| 0.40 | 0.56 | 1.00 | 0.72 |
+| **0.45** | **0.71** | **0.94** | **0.81** |
+| 0.50 | 0.88 | 0.83 | 0.86 |
+| 0.55 | 1.00 | 0.61 | 0.76 |
+
+- The threshold was raised from 0.40 to 0.45. F1 is highest at 0.50, but 0.45 was chosen on purpose: the model can ignore a weak match it sees, but it cannot use a relevant incident the search left out, so recall matters more than precision here.
+- For both unrelated queries (a printer problem and a warehouse scanner problem), nothing is returned at 0.45.
+- The set is small and the threshold was tuned on it, so the numbers are optimistic. The set should grow with real incidents and the threshold should be measured again.
+
 
 ## Architecture Roadmap
 
