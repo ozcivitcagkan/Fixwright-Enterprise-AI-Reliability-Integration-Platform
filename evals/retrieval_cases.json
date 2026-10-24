@@ -1,0 +1,22 @@
+[
+  {"query": "Salary batch did not finish overnight because the DB stopped answering",
+   "relevant": ["EV-01", "EV-02", "EV-03", "EV-04"]},
+  {"query": "Browser warns that the site is not secure since this morning; the certificate seems out of date",
+   "relevant": ["EV-05", "EV-06", "EV-07"]},
+  {"query": "Nobody can store files on the shared drive, it says there is no space left",
+   "relevant": ["EV-08", "EV-09", "EV-10"]},
+  {"query": "Staff working from home are unable to get on the corporate network since last night's firewall change",
+   "relevant": ["EV-11"]},
+  {"query": "Server names cannot be looked up and everything internal is unreachable",
+   "relevant": ["EV-12"]},
+  {"query": "SSO sign-in is broken because the IdP response is rejected",
+   "relevant": ["EV-14", "EV-16"]},
+  {"query": "Employees are locked out of their accounts after the new password rules",
+   "relevant": ["EV-15"]},
+  {"query": "Database writes stopped because the log disk filled up",
+   "relevant": ["EV-09", "EV-08", "EV-10"]},
+  {"query": "Printer on the third floor prints blank pages",
+   "relevant": []},
+  {"query": "Warehouse handheld scanners show wrong stock quantities after the ERP sync",
+   "relevant": []}
+]
