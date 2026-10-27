@@ -23,6 +23,7 @@ The API is deployed at **https://fixwright.onrender.com**
 - Human-in-the-loop approval: AI analyses are saved only after a person approves or rejects them
 - Semantic search over past incidents (RAG) with pgvector and Voyage AI embeddings
 - Approved analyses of similar incidents are reused as evidence; rejected ones are never shown to the agent
+- MCP server so AI assistants such as Claude Desktop can list, create, and analyze incidents, while the approval decision stays with a person
 - Durable agent state with the LangGraph Postgres checkpointer
 - API key authentication on every endpoint except the health check
 - Pydantic request and response validation
@@ -45,6 +46,7 @@ The API is deployed at **https://fixwright.onrender.com**
 - Anthropic Claude (Haiku 5.5)
 - Voyage AI embeddings (voyage-4)
 - LangSmith (tracing)
+- MCP (Model Context Protocol) Python SDK
 - pytest
 - Docker
 - GitHub Actions
@@ -258,6 +260,52 @@ Latest run with `--runs 3` (each scenario three times): 60/60 checks passed, and
 
 Limitations: four scenarios is a small set, and the judge is the same model as the agent.
 
+## MCP Server (AI Assistants)
+
+Fixwright can be used as a set of tools from AI assistants such as Claude Desktop through the Model Context Protocol (MCP). `app/mcp_server.py` is a thin client over the HTTP API: authentication, the agent, and the human approval step all stay in the API, and the MCP server only forwards calls.
+
+| Tool | Calls | Notes |
+|---|---|---|
+| `list_incidents` | `GET /incidents` | Read-only |
+| `create_incident` | `POST /incidents` | Fails if the incident ID already exists |
+| `analyze_incident` | `POST /incidents/{incident_id}/analyze` | Returns the pending analysis and its `thread_id` |
+| `decide_analysis` | `POST /analyses/{thread_id}/decision` | Marked as destructive; its description tells the assistant to decide only after the user explicitly says so |
+
+Design choices:
+
+- **Tools are chosen by hand, not generated from the OpenAPI spec.** Updating and deleting incidents are left out on purpose (least privilege): deleting an incident also deletes its analyses, including approved ones.
+- **The decision stays with a person.** The assistant shows the analysis and asks for a decision, and the client asks for permission before each `decide_analysis` call. A decision cannot be changed; a second attempt returns `409`.
+- **API errors become tool errors.** Connection failures and error responses are returned to the assistant with the status code and message, so it can explain them instead of failing silently.
+- **Local only for now.** The assistant starts the server as a local process and talks to it over stdio. A remote MCP endpoint on the live demo will only be added together with OAuth, because the tools write data and every analysis costs model calls. The server currently uses one API key with full access; scoped keys are a later step.
+
+Setup with Claude Desktop on Windows, with the repository in WSL:
+
+1. Run the API (`uvicorn app.main:app`). The MCP server reads `FIXWRIGHT_API_KEY` from `.env` and calls `FIXWRIGHT_API_URL` (default `http://localhost:8000`).
+2. In Claude Desktop, open Settings > Developer > Edit Config and add:
+
+   ```json
+   {
+     "mcpServers": {
+       "fixwright": {
+         "command": "wsl.exe",
+         "args": [
+           "-d", "Ubuntu",
+           "--cd", "/path/to/repo",
+           "--exec", "/path/to/repo/.venv/bin/python",
+           "-m", "app.mcp_server"
+         ]
+       }
+     }
+   }
+   ```
+
+3. Quit Claude Desktop completely and open it again. The four tools appear under `fixwright`.
+
+Example from a local run: asked to analyze INC-105, the assistant called `analyze_incident`, showed the probable cause as inferred from INC-101, INC-102, and INC-104, and asked whether to approve or reject it. It did not decide on its own. The rejection was saved, and a later attempt to approve the same analysis returned `409`, which the assistant reported to the user.
+
+Tests in `tests/test_mcp_server.py` call the tools through an in-memory MCP client. The HTTP client is replaced with the FastAPI test client and the chat model with the fake model, so the path from MCP tool to database is tested without network access or real model calls.
+
+
 ## Architecture Roadmap
 
 The platform is being developed toward an enterprise AI reliability architecture covering:
@@ -275,4 +323,4 @@ The platform is being developed toward an enterprise AI reliability architecture
 
 Active Development
 
-The core API, the database layer, the AI incident analysis agent, the human approval workflow, semantic search over past incidents with pgvector, and API key authentication are implemented.
+The core API, the database layer, the AI incident analysis agent, the human approval workflow, semantic search over past incidents with pgvector, API key authentication, and an MCP server for AI assistants are implemented.
