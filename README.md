@@ -242,10 +242,10 @@ Configuration:
 
 The live deployment is a public demo, so it must never hold real company or personal data, and demo data does not stay forever.
 
-- Incidents created by `demo` and analyses requested by `demo` are deleted after 7 days (`DEMO_RETENTION_DAYS` in `app/config.py`). Deleting a demo incident also deletes all of its analyses.
+- Incidents created by `demo` and analyses requested by `demo` are deleted 7 days after they were created, and analyses decided by `demo` (which carry the visitor's comment) 7 days after the decision (`DEMO_RETENTION_DAYS` in `app/config.py`). Deleting a demo incident also deletes all of its analyses.
 - The LangGraph checkpoints of those analyses are deleted as well (`PostgresSaver.delete_thread`), because a checkpoint contains the incident text and the model messages.
 - The cleanup runs on every container start (`python -m app.demo`) and once a day while the API is running. On the free Render instance, which sleeps when idle, the run at startup is the one that usually happens.
-- Data created with the API key or by `admin` is never deleted automatically.
+- Data created with the API key or by `admin` is never deleted automatically, unless a demo user decided the analysis.
 
 ## Observability (LangSmith Tracing)
 

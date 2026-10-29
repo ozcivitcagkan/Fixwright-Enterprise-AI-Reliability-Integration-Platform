@@ -61,7 +61,8 @@ def ensure_not_demo(role: str) -> None:
 
 def delete_old_demo_data(conn, checkpointer) -> dict[str, int]:
     """Deletes demo incidents and demo analyses older than DEMO_RETENTION_DAYS,
-    together with the LangGraph checkpoints of those analyses."""
+    together with the LangGraph checkpoints of those analyses. An analysis counts as
+    demo data when demo requested it or when demo decided it (the comment is theirs)."""
     retention = {"days": DEMO_RETENTION_DAYS}
     with conn.cursor() as cursor:
         # Collected first: the incident delete below also removes the analyses of
@@ -72,6 +73,7 @@ def delete_old_demo_data(conn, checkpointer) -> dict[str, int]:
             FROM incident_analyses a
             JOIN incidents i ON i.incident_id = a.incident_id
             WHERE (a.requested_by = 'demo' AND a.created_at < now() - make_interval(days => %(days)s))
+               OR (a.decided_by = 'demo' AND a.reviewed_at < now() - make_interval(days => %(days)s))
                OR (i.created_by = 'demo' AND i.created_at < now() - make_interval(days => %(days)s))
             """,
             retention,
@@ -90,7 +92,8 @@ def delete_old_demo_data(conn, checkpointer) -> dict[str, int]:
         cursor.execute(
             """
             DELETE FROM incident_analyses
-            WHERE requested_by = 'demo' AND created_at < now() - make_interval(days => %(days)s)
+            WHERE (requested_by = 'demo' AND created_at < now() - make_interval(days => %(days)s))
+               OR (decided_by = 'demo' AND reviewed_at < now() - make_interval(days => %(days)s))
             """,
             retention,
         )
