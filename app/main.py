@@ -23,8 +23,14 @@ from app.auth import (
     session_https_only,
     session_secret,
 )
-from app.config import DEMO_DAILY_ANALYSIS_LIMIT, SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS
+from app.config import SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS
 from app.db import connect, connect_checkpointer_db
+from app.demo import (
+    demo_analyses_left,
+    ensure_demo_can_analyze,
+    ensure_demo_can_create,
+    ensure_not_demo,
+)
 from app.embeddings import embed_for_storage, get_embeddings
 
 
@@ -133,11 +139,12 @@ class Me(BaseModel):
 
 @app.post("/auth/demo", response_model=Me, response_model_exclude_none=True,
           dependencies=[Depends(require_web_client)])
-def sign_in_as_demo(request: Request):
+def sign_in_as_demo(request: Request,
+                    conn = Depends(get_db)
+                    ):
     request.session.clear()
     request.session["role"] = "demo"
-    # The real count of today's remaining analyses arrives with the demo limits
-    return {"role": "demo", "demo_analyses_left": DEMO_DAILY_ANALYSIS_LIMIT}
+    return {"role": "demo", "demo_analyses_left": demo_analyses_left(conn)}
 
 
 @app.post("/auth/login", response_model=Me, response_model_exclude_none=True,
@@ -160,9 +167,11 @@ def sign_out(request: Request):
 
 
 @app.get("/auth/me", response_model=Me, response_model_exclude_none=True)
-def who_am_i(role: str = Depends(require_auth)):
+def who_am_i(role: str = Depends(require_auth),
+             conn = Depends(get_db)
+             ):
     if role == "demo":
-        return {"role": role, "demo_analyses_left": DEMO_DAILY_ANALYSIS_LIMIT}
+        return {"role": role, "demo_analyses_left": demo_analyses_left(conn)}
     return {"role": role}
 
 
@@ -172,6 +181,9 @@ def create_incident(incident: Incident,
                     conn = Depends(get_db),
                     embeddings = Depends(get_embeddings)
                     ):
+    # Checked before embedding so a refused request costs no Voyage call
+    if role == "demo":
+        ensure_demo_can_create(conn, incident.description)
 
     embedding = embed_for_storage(embeddings, incident.description)
 
@@ -299,12 +311,14 @@ def get_analyses(status: Literal["pending"],
         return cursor.fetchall()
 
 
-@app.put("/incidents/{incident_id}", dependencies=[Depends(require_auth)])
+@app.put("/incidents/{incident_id}")
 def update_incident(incident_id: str, 
                     incident: IncidentUpdate,
+                    role: str = Depends(require_auth),
                     conn = Depends(get_db),
                     embeddings = Depends(get_embeddings)
                     ):
+    ensure_not_demo(role)
 
     embedding = embed_for_storage(embeddings, incident.description)
 
@@ -332,10 +346,13 @@ def update_incident(incident_id: str,
     "description": incident.description
     }
 
-@app.delete("/incidents/{incident_id}", dependencies=[Depends(require_auth)])
+@app.delete("/incidents/{incident_id}")
 def delete_incident(incident_id: str,
+                    role: str = Depends(require_auth),
                     conn= Depends(get_db)
                     ):
+    ensure_not_demo(role)
+
     with conn.cursor() as cursor:
         cursor.execute(
             """
@@ -376,6 +393,10 @@ def analyze_incident(incident_id: str,
                 status_code=404,
                 detail="Incident not found"
             )
+
+    # Checked before the agent runs so a refused request costs no model call
+    if role == "demo":
+        ensure_demo_can_analyze(conn)
 
     thread_id = str(uuid4())
     config = {

@@ -15,4 +15,7 @@ SESSION_COOKIE_NAME = "fixwright_session"
 SESSION_MAX_AGE_SECONDS = 8 * 60 * 60
 SESSION_SECRET_MIN_LENGTH = 32
 
+# Limits for the public demo role, counted per UTC day across all demo sessions
 DEMO_DAILY_ANALYSIS_LIMIT = 30
+DEMO_DAILY_INCIDENT_LIMIT = 20
+DEMO_MAX_DESCRIPTION_LENGTH = 1000
