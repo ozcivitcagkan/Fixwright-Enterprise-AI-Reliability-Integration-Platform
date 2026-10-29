@@ -47,6 +47,34 @@ app.add_middleware(
     https_only=session_https_only(),
 )
 
+
+# Only files from this site may run, and no other site may frame these pages
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+)
+# Swagger UI loads its files from the jsDelivr CDN and starts with an inline script
+DOCS_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https://fastapi.tiangolo.com; object-src 'none'; frame-ancestors 'none'"
+)
+DOCS_PATHS = {"/docs", "/docs/oauth2-redirect", "/redoc"}
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = (
+        DOCS_CONTENT_SECURITY_POLICY if request.url.path in DOCS_PATHS else CONTENT_SECURITY_POLICY
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "same-origin"
+    # Browsers ignore this header over plain http, and local development uses http
+    if session_https_only():
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    return response
+
 def get_db():
     conn = connect()
     try:
