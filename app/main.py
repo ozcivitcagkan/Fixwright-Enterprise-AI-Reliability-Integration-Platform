@@ -1,4 +1,5 @@
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Depends, Request
@@ -9,6 +10,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
 from psycopg.errors import UniqueViolation
+from psycopg.rows import dict_row
 from starlette.middleware.sessions import SessionMiddleware
 import psycopg
 
@@ -80,6 +82,7 @@ class IncidentResponse(BaseModel):
     id: int 
     incident_id: str
     description: str
+    latest_status: str | None = None
 
 class IncidentUpdate(BaseModel):
     description: Description
@@ -96,6 +99,29 @@ class Decision(BaseModel):
 class DecisionResponse(BaseModel):
     thread_id: str
     status: str
+
+class SimilarIncident(BaseModel):
+    incident_id: str
+    similarity: float
+    has_approved_analysis: bool
+
+class AnalysisRecord(BaseModel):
+    thread_id: str
+    status: str
+    analysis: AnalysisResult
+    similar_incidents: list[SimilarIncident]
+    reviewer_comment: str | None
+    requested_by: str | None
+    decided_by: str | None
+    created_at: datetime
+    reviewed_at: datetime | None
+
+class PendingAnalysis(BaseModel):
+    thread_id: str
+    incident_id: str
+    description: str
+    probable_cause: str
+    created_at: datetime
 
 class LoginRequest(BaseModel):
     api_key: str
@@ -173,22 +199,104 @@ def create_incident(incident: Incident,
         "description": incident.description
     }
 
+# Each incident with the status of its newest analysis (empty when it has none)
+INCIDENTS_WITH_LATEST_STATUS = """
+    SELECT i.id, i.incident_id, i.description, a.status AS latest_status
+    FROM incidents i
+    LEFT JOIN LATERAL (
+        SELECT status
+        FROM incident_analyses
+        WHERE incident_id = i.incident_id
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+    ) a ON true
+"""
+
 @app.get("/incidents", response_model=list[IncidentResponse], dependencies=[Depends(require_auth)])
 def get_incidents(conn= Depends(get_db)):
-    with conn.cursor() as cursor:
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(INCIDENTS_WITH_LATEST_STATUS + " ORDER BY i.id DESC")
+        return cursor.fetchall()
+
+
+@app.get("/incidents/{incident_id}", response_model=IncidentResponse, dependencies=[Depends(require_auth)])
+def get_incident(incident_id: str,
+                 conn = Depends(get_db)
+                 ):
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(INCIDENTS_WITH_LATEST_STATUS + " WHERE i.incident_id = %s", (incident_id,))
+        incident = cursor.fetchone()
+
+    if incident is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Incident not found"
+        )
+    return incident
+
+
+@app.get("/incidents/{incident_id}/analyses", response_model=list[AnalysisRecord],
+         dependencies=[Depends(require_auth)])
+def get_incident_analyses(incident_id: str,
+                          conn = Depends(get_db)
+                          ):
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("SELECT 1 AS found FROM incidents WHERE incident_id = %s", (incident_id,))
+        if cursor.fetchone() is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Incident not found"
+            )
+
         cursor.execute(
-            "SELECT id, incident_id,description FROM incidents"
+            """
+            SELECT thread_id, status, probable_cause, suggested_steps, evidence,
+                   similar_incidents, reviewer_comment, requested_by, decided_by,
+                   created_at, reviewed_at
+            FROM incident_analyses
+            WHERE incident_id = %s
+            ORDER BY created_at DESC, id DESC
+            """,
+            (incident_id,)
         )
         rows = cursor.fetchall()
 
     return [
         {
-            "id": row[0],
-            "incident_id": row[1],
-            "description": row[2]
+            "thread_id": row["thread_id"],
+            "status": row["status"],
+            "analysis": {
+                "probable_cause": row["probable_cause"],
+                "suggested_steps": row["suggested_steps"],
+                "evidence": row["evidence"],
+            },
+            "similar_incidents": row["similar_incidents"],
+            "reviewer_comment": row["reviewer_comment"],
+            "requested_by": row["requested_by"],
+            "decided_by": row["decided_by"],
+            "created_at": row["created_at"],
+            "reviewed_at": row["reviewed_at"],
         }
         for row in rows
     ]
+
+
+@app.get("/analyses", response_model=list[PendingAnalysis], dependencies=[Depends(require_auth)])
+def get_analyses(status: Literal["pending"],
+                 conn = Depends(get_db)
+                 ):
+    # Only the queue of analyses waiting for a decision exists for now
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT a.thread_id, a.incident_id, i.description, a.probable_cause, a.created_at
+            FROM incident_analyses a
+            JOIN incidents i ON i.incident_id = a.incident_id
+            WHERE a.status = 'pending'
+            ORDER BY a.created_at, a.id
+            """
+        )
+        return cursor.fetchall()
 
 
 @app.put("/incidents/{incident_id}", dependencies=[Depends(require_auth)])

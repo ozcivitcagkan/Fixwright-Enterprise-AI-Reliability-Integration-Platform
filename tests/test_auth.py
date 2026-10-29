@@ -6,6 +6,9 @@ from tests.conftest import WEB, sign_in_admin, sign_in_demo
 PROTECTED_ENDPOINTS = [
     ("POST", "/incidents"),
     ("GET", "/incidents"),
+    ("GET", "/incidents/INC-001"),
+    ("GET", "/incidents/INC-001/analyses"),
+    ("GET", "/analyses?status=pending"),
     ("PUT", "/incidents/INC-001"),
     ("DELETE", "/incidents/INC-001"),
     ("POST", "/incidents/INC-001/analyze"),
