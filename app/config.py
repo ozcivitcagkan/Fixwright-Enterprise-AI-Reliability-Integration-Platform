@@ -19,3 +19,5 @@ SESSION_SECRET_MIN_LENGTH = 32
 DEMO_DAILY_ANALYSIS_LIMIT = 30
 DEMO_DAILY_INCIDENT_LIMIT = 20
 DEMO_MAX_DESCRIPTION_LENGTH = 1000
+# Demo incidents and analyses, with their LangGraph checkpoints, are deleted after this many days
+DEMO_RETENTION_DAYS = 7

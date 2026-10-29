@@ -1,3 +1,6 @@
+import asyncio
+import logging
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -30,11 +33,37 @@ from app.demo import (
     ensure_demo_can_analyze,
     ensure_demo_can_create,
     ensure_not_demo,
+    run_demo_cleanup,
 )
 from app.embeddings import embed_for_storage, get_embeddings
 
+logger = logging.getLogger(__name__)
 
-app = FastAPI()
+DEMO_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
+
+
+async def clean_demo_data_daily():
+    while True:
+        await asyncio.sleep(DEMO_CLEANUP_INTERVAL_SECONDS)
+        # Runs in a worker thread so the blocking database calls do not stop other requests
+        try:
+            await asyncio.to_thread(run_demo_cleanup)
+        except Exception:
+            logger.exception("Demo cleanup failed")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # The container also cleans up once at start, because the free Render instance
+    # sleeps when idle and may never stay up for a full day
+    cleanup = asyncio.create_task(clean_demo_data_daily())
+    yield
+    cleanup.cancel()
+    with suppress(asyncio.CancelledError):
+        await cleanup
+
+
+app = FastAPI(lifespan=lifespan)
 load_dotenv()
 
 # The cookie holds only the role, signed with SESSION_SECRET. The app does not start without it.
