@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StringConstraints
 from dotenv import load_dotenv
@@ -9,17 +9,35 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
 from psycopg.errors import UniqueViolation
+from starlette.middleware.sessions import SessionMiddleware
 import psycopg
 
 from app.agent.graph import AnalysisResult, build_agent
 from app.agent.llm import get_chat_model
-from app.auth import require_api_key
+from app.auth import (
+    check_api_key,
+    require_auth,
+    require_web_client,
+    session_https_only,
+    session_secret,
+)
+from app.config import DEMO_DAILY_ANALYSIS_LIMIT, SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS
 from app.db import connect, connect_checkpointer_db
 from app.embeddings import embed_for_storage, get_embeddings
 
 
 app = FastAPI()
 load_dotenv()
+
+# The cookie holds only the role, signed with SESSION_SECRET. The app does not start without it.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=session_secret(),
+    session_cookie=SESSION_COOKIE_NAME,
+    max_age=SESSION_MAX_AGE_SECONDS,
+    same_site="strict",
+    https_only=session_https_only(),
+)
 
 def get_db():
     conn = connect()
@@ -79,8 +97,52 @@ class DecisionResponse(BaseModel):
     thread_id: str
     status: str
 
-@app.post("/incidents", dependencies=[Depends(require_api_key)])
+class LoginRequest(BaseModel):
+    api_key: str
+
+class Me(BaseModel):
+    role: str
+    demo_analyses_left: int | None = None
+
+
+@app.post("/auth/demo", response_model=Me, response_model_exclude_none=True,
+          dependencies=[Depends(require_web_client)])
+def sign_in_as_demo(request: Request):
+    request.session.clear()
+    request.session["role"] = "demo"
+    # The real count of today's remaining analyses arrives with the demo limits
+    return {"role": "demo", "demo_analyses_left": DEMO_DAILY_ANALYSIS_LIMIT}
+
+
+@app.post("/auth/login", response_model=Me, response_model_exclude_none=True,
+          dependencies=[Depends(require_web_client)])
+def sign_in_as_admin(login: LoginRequest, request: Request):
+    if not check_api_key(login.api_key):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API key"
+        )
+    request.session.clear()
+    request.session["role"] = "admin"
+    return {"role": "admin"}
+
+
+@app.post("/auth/logout", dependencies=[Depends(require_web_client)])
+def sign_out(request: Request):
+    request.session.clear()
+    return {"message": "Signed out"}
+
+
+@app.get("/auth/me", response_model=Me, response_model_exclude_none=True)
+def who_am_i(role: str = Depends(require_auth)):
+    if role == "demo":
+        return {"role": role, "demo_analyses_left": DEMO_DAILY_ANALYSIS_LIMIT}
+    return {"role": role}
+
+
+@app.post("/incidents")
 def create_incident(incident: Incident,
+                    role: str = Depends(require_auth),
                     conn = Depends(get_db),
                     embeddings = Depends(get_embeddings)
                     ):
@@ -91,10 +153,10 @@ def create_incident(incident: Incident,
         with conn.cursor() as cursor:
             cursor.execute(
                 """ 
-                    INSERT INTO incidents (incident_id, description, embedding)
-                    VALUES (%s, %s, %s::vector)
+                    INSERT INTO incidents (incident_id, description, embedding, created_by)
+                    VALUES (%s, %s, %s::vector, %s)
                 """,
-                (incident.incident_id, incident.description, embedding)
+                (incident.incident_id, incident.description, embedding, role)
             )
     except UniqueViolation:
         raise HTTPException(
@@ -111,7 +173,7 @@ def create_incident(incident: Incident,
         "description": incident.description
     }
 
-@app.get("/incidents", response_model=list[IncidentResponse], dependencies=[Depends(require_api_key)])
+@app.get("/incidents", response_model=list[IncidentResponse], dependencies=[Depends(require_auth)])
 def get_incidents(conn= Depends(get_db)):
     with conn.cursor() as cursor:
         cursor.execute(
@@ -129,7 +191,7 @@ def get_incidents(conn= Depends(get_db)):
     ]
 
 
-@app.put("/incidents/{incident_id}", dependencies=[Depends(require_api_key)])
+@app.put("/incidents/{incident_id}", dependencies=[Depends(require_auth)])
 def update_incident(incident_id: str, 
                     incident: IncidentUpdate,
                     conn = Depends(get_db),
@@ -162,7 +224,7 @@ def update_incident(incident_id: str,
     "description": incident.description
     }
 
-@app.delete("/incidents/{incident_id}", dependencies=[Depends(require_api_key)])
+@app.delete("/incidents/{incident_id}", dependencies=[Depends(require_auth)])
 def delete_incident(incident_id: str,
                     conn= Depends(get_db)
                     ):
@@ -188,7 +250,7 @@ def delete_incident(incident_id: str,
         "incident_id": incident_id
     }
 
-@app.post("/incidents/{incident_id}/analyze", response_model=AnalysisPending, dependencies=[Depends(require_api_key)])
+@app.post("/incidents/{incident_id}/analyze", response_model=AnalysisPending, dependencies=[Depends(require_auth)])
 def analyze_incident(incident_id: str,
                      conn = Depends(get_db),
                      checkpointer = Depends(get_checkpointer),
@@ -230,7 +292,7 @@ def analyze_incident(incident_id: str,
         "analysis": result["__interrupt__"][0].value["analysis"],
     }
 
-@app.post("/analyses/{thread_id}/decision", response_model=DecisionResponse, dependencies=[Depends(require_api_key)])
+@app.post("/analyses/{thread_id}/decision", response_model=DecisionResponse, dependencies=[Depends(require_auth)])
 def decide_analysis(thread_id: str,
                     decision: Decision,
                     conn = Depends(get_db),

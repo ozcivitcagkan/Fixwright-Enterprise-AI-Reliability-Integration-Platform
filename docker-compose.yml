@@ -26,6 +26,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       FIXWRIGHT_API_KEY: ${FIXWRIGHT_API_KEY}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY}
+      SESSION_SECRET: ${SESSION_SECRET}
+      SESSION_HTTPS_ONLY: "false"
     depends_on:
       db:
         condition: service_healthy

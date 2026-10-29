@@ -9,3 +9,10 @@ EMBEDDING_DIMENSIONS = 1024
 # Missing a relevant incident costs more than showing an extra one, because the
 # model can ignore a weak match but cannot use one it never sees.
 SIMILARITY_THRESHOLD = 0.45
+
+SESSION_COOKIE_NAME = "fixwright_session"
+# Fixed lifetime: the cookie is only re-sent when the session changes, so it does not slide
+SESSION_MAX_AGE_SECONDS = 8 * 60 * 60
+SESSION_SECRET_MIN_LENGTH = 32
+
+DEMO_DAILY_ANALYSIS_LIMIT = 30
