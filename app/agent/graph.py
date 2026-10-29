@@ -1,3 +1,5 @@
+import json
+
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -36,8 +38,41 @@ class AnalysisResult(BaseModel):
 
 class AgentState(MessagesState):
     incident_id: str
+    requested_by: str | None
     analysis: dict | None
     decision: dict | None
+    saved: bool | None
+
+
+def collect_similar_incidents(messages) -> list[dict]:
+    """Structured list of the incidents the agent's searches found: for each one the
+    highest similarity seen and whether it had an approved analysis. Error results,
+    other tools and content that is not JSON are skipped."""
+    found: dict[str, dict] = {}
+    for message in messages:
+        if not isinstance(message, ToolMessage) or message.name != "search_similar_incidents":
+            continue
+        try:
+            results = json.loads(message.content)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(results, list):
+            continue
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            entry = found.setdefault(
+                result["incident_id"],
+                {
+                    "incident_id": result["incident_id"],
+                    "similarity": result["similarity"],
+                    "has_approved_analysis": False,
+                },
+            )
+            entry["similarity"] = max(entry["similarity"], result["similarity"])
+            if result.get("approved_analysis") is not None:
+                entry["has_approved_analysis"] = True
+    return sorted(found.values(), key=lambda item: item["similarity"], reverse=True)
 
 
 def build_agent(model, conn, embeddings, checkpointer=None):
@@ -62,6 +97,32 @@ def build_agent(model, conn, embeddings, checkpointer=None):
         analysis = report_model.invoke([HumanMessage(prompt)])
         return {"analysis": analysis.model_dump()}
 
+    def record_pending(state: AgentState, config: RunnableConfig):
+        # Runs once: the checkpoint after this node means a resume does not repeat it
+        analysis = state["analysis"]
+
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO incident_analyses
+                    (incident_id, thread_id, status, probable_cause, suggested_steps,
+                     evidence, similar_incidents, requested_by)
+                VALUES (%s, %s, 'pending', %s, %s, %s, %s, %s)
+                ON CONFLICT (thread_id) DO NOTHING
+                """,
+                (
+                    state["incident_id"],
+                    config["configurable"]["thread_id"],
+                    analysis["probable_cause"],
+                    Jsonb(analysis["suggested_steps"]),
+                    Jsonb(analysis["evidence"]),
+                    Jsonb(collect_similar_incidents(state["messages"])),
+                    state.get("requested_by"),
+                ),
+            )
+        conn.commit()
+        return {}
+
     def approval(state: AgentState):
         decision = interrupt({
             "incident_id": state["incident_id"],
@@ -70,41 +131,41 @@ def build_agent(model, conn, embeddings, checkpointer=None):
         return {"decision": decision}
 
     def save(state: AgentState, config: RunnableConfig):
-        analysis = state["analysis"]
         decision = state["decision"]
 
+        # Only a row that is still pending can be decided, so two decisions at the
+        # same time cannot both win: the second one updates nothing.
         with conn.cursor() as cursor:
             cursor.execute(
                 """
-                INSERT INTO incident_analyses
-                    (incident_id, thread_id, status, probable_cause,
-                     suggested_steps, evidence, reviewer_comment)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                UPDATE incident_analyses
+                SET status = %s, reviewer_comment = %s, decided_by = %s, reviewed_at = now()
+                WHERE thread_id = %s AND status = 'pending'
                 """,
                 (
-                    state["incident_id"],
-                    config["configurable"]["thread_id"],
                     "approved" if decision["approved"] else "rejected",
-                    analysis["probable_cause"],
-                    Jsonb(analysis["suggested_steps"]),
-                    Jsonb(analysis["evidence"]),
                     decision.get("comment"),
+                    decision.get("decided_by"),
+                    config["configurable"]["thread_id"],
                 ),
             )
+            saved = cursor.rowcount == 1
         conn.commit()
-        return {}
+        return {"saved": saved}
 
     builder = StateGraph(AgentState)
     builder.add_node("agent", agent)
     builder.add_node("tools", ToolNode(tools))
     builder.add_node("respond", respond)
+    builder.add_node("record_pending", record_pending)
     builder.add_node("approval", approval)
     builder.add_node("save", save)
 
     builder.add_edge(START, "agent")
     builder.add_conditional_edges("agent", tools_condition, {"tools": "tools", END: "respond"})
     builder.add_edge("tools", "agent")
-    builder.add_edge("respond", "approval")
+    builder.add_edge("respond", "record_pending")
+    builder.add_edge("record_pending", "approval")
     builder.add_edge("approval", "save")
     builder.add_edge("save", END)
 

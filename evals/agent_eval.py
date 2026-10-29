@@ -49,8 +49,8 @@ def add_reviewed_analyses(conn, reviewed):
             cursor.execute(
                 """
                 INSERT INTO incident_analyses
-                    (incident_id, thread_id, status, probable_cause, suggested_steps, evidence)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                    (incident_id, thread_id, status, probable_cause, suggested_steps, evidence, reviewed_at)
+                VALUES (%s, %s, %s, %s, %s, %s, now())
                 """,
                 (
                     item["incident_id"],
@@ -84,6 +84,7 @@ def run_case(conn, embeddings, case):
         result = graph.invoke(
             {
                 "incident_id": case["incident_id"],
+                "requested_by": "eval",
                 "messages": [HumanMessage(f"Analyze incident {case['incident_id']}")],
             },
             config,

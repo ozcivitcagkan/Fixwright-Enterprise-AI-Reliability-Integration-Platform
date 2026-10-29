@@ -250,8 +250,9 @@ def delete_incident(incident_id: str,
         "incident_id": incident_id
     }
 
-@app.post("/incidents/{incident_id}/analyze", response_model=AnalysisPending, dependencies=[Depends(require_auth)])
+@app.post("/incidents/{incident_id}/analyze", response_model=AnalysisPending)
 def analyze_incident(incident_id: str,
+                     role: str = Depends(require_auth),
                      conn = Depends(get_db),
                      checkpointer = Depends(get_checkpointer),
                      model = Depends(get_chat_model),
@@ -281,6 +282,7 @@ def analyze_incident(incident_id: str,
     result = graph.invoke(
         {
             "incident_id": incident_id,
+            "requested_by": role,
             "messages": [HumanMessage(f"Analyze incident {incident_id}")],
         },
         config,
@@ -292,9 +294,10 @@ def analyze_incident(incident_id: str,
         "analysis": result["__interrupt__"][0].value["analysis"],
     }
 
-@app.post("/analyses/{thread_id}/decision", response_model=DecisionResponse, dependencies=[Depends(require_auth)])
+@app.post("/analyses/{thread_id}/decision", response_model=DecisionResponse)
 def decide_analysis(thread_id: str,
                     decision: Decision,
+                    role: str = Depends(require_auth),
                     conn = Depends(get_db),
                     checkpointer = Depends(get_checkpointer),
                     model = Depends(get_chat_model),
@@ -315,8 +318,8 @@ def decide_analysis(thread_id: str,
             detail="Analysis already decided"
         )
 
-    graph.invoke(
-        Command(resume=decision.model_dump()),
+    result = graph.invoke(
+        Command(resume={**decision.model_dump(), "decided_by": role}),
         {
             **config,
             "run_name": "decide_analysis",
@@ -327,6 +330,13 @@ def decide_analysis(thread_id: str,
             },
         },
     )
+
+    # The decision lost a race (someone decided first) or the analysis has no pending row
+    if not result.get("saved"):
+        raise HTTPException(
+            status_code=409,
+            detail="Analysis already decided"
+        )
 
     return {
         "thread_id": thread_id,
