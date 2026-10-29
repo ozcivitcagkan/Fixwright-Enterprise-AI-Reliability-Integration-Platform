@@ -1,7 +1,11 @@
-from typing import Annotated
+import asyncio
+import logging
+from contextlib import asynccontextmanager, suppress
+from datetime import datetime
+from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StringConstraints
 from dotenv import load_dotenv
@@ -9,17 +13,96 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
 from psycopg.errors import UniqueViolation
+from psycopg.rows import dict_row
+from starlette.middleware.sessions import SessionMiddleware
 import psycopg
 
 from app.agent.graph import AnalysisResult, build_agent
 from app.agent.llm import get_chat_model
-from app.auth import require_api_key
+from app.auth import (
+    check_api_key,
+    require_auth,
+    require_web_client,
+    session_https_only,
+    session_secret,
+)
+from app.config import SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS
 from app.db import connect, connect_checkpointer_db
+from app.demo import (
+    demo_analyses_left,
+    ensure_demo_can_analyze,
+    ensure_demo_can_create,
+    ensure_not_demo,
+    run_demo_cleanup,
+)
 from app.embeddings import embed_for_storage, get_embeddings
 
+logger = logging.getLogger(__name__)
 
-app = FastAPI()
+DEMO_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
+
+
+async def clean_demo_data_daily():
+    while True:
+        await asyncio.sleep(DEMO_CLEANUP_INTERVAL_SECONDS)
+        # Runs in a worker thread so the blocking database calls do not stop other requests
+        try:
+            await asyncio.to_thread(run_demo_cleanup)
+        except Exception:
+            logger.exception("Demo cleanup failed")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # The container also cleans up once at start, because the free Render instance
+    # sleeps when idle and may never stay up for a full day
+    cleanup = asyncio.create_task(clean_demo_data_daily())
+    yield
+    cleanup.cancel()
+    with suppress(asyncio.CancelledError):
+        await cleanup
+
+
+app = FastAPI(lifespan=lifespan)
 load_dotenv()
+
+# The cookie holds only the role, signed with SESSION_SECRET. The app does not start without it.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=session_secret(),
+    session_cookie=SESSION_COOKIE_NAME,
+    max_age=SESSION_MAX_AGE_SECONDS,
+    same_site="strict",
+    https_only=session_https_only(),
+)
+
+
+# Only files from this site may run, and no other site may frame these pages
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+)
+# Swagger UI loads its files from the jsDelivr CDN and starts with an inline script
+DOCS_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https://fastapi.tiangolo.com; object-src 'none'; frame-ancestors 'none'"
+)
+DOCS_PATHS = {"/docs", "/docs/oauth2-redirect", "/redoc"}
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = (
+        DOCS_CONTENT_SECURITY_POLICY if request.url.path in DOCS_PATHS else CONTENT_SECURITY_POLICY
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "same-origin"
+    # Browsers ignore this header over plain http, and local development uses http
+    if session_https_only():
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    return response
 
 def get_db():
     conn = connect()
@@ -62,6 +145,7 @@ class IncidentResponse(BaseModel):
     id: int 
     incident_id: str
     description: str
+    latest_status: str | None = None
 
 class IncidentUpdate(BaseModel):
     description: Description
@@ -79,11 +163,84 @@ class DecisionResponse(BaseModel):
     thread_id: str
     status: str
 
-@app.post("/incidents", dependencies=[Depends(require_api_key)])
+class SimilarIncident(BaseModel):
+    incident_id: str
+    similarity: float
+    has_approved_analysis: bool
+
+class AnalysisRecord(BaseModel):
+    thread_id: str
+    status: str
+    analysis: AnalysisResult
+    similar_incidents: list[SimilarIncident]
+    reviewer_comment: str | None
+    requested_by: str | None
+    decided_by: str | None
+    created_at: datetime
+    reviewed_at: datetime | None
+
+class PendingAnalysis(BaseModel):
+    thread_id: str
+    incident_id: str
+    description: str
+    probable_cause: str
+    created_at: datetime
+
+class LoginRequest(BaseModel):
+    api_key: str
+
+class Me(BaseModel):
+    role: str
+    demo_analyses_left: int | None = None
+
+
+@app.post("/auth/demo", response_model=Me, response_model_exclude_none=True,
+          dependencies=[Depends(require_web_client)])
+def sign_in_as_demo(request: Request,
+                    conn = Depends(get_db)
+                    ):
+    request.session.clear()
+    request.session["role"] = "demo"
+    return {"role": "demo", "demo_analyses_left": demo_analyses_left(conn)}
+
+
+@app.post("/auth/login", response_model=Me, response_model_exclude_none=True,
+          dependencies=[Depends(require_web_client)])
+def sign_in_as_admin(login: LoginRequest, request: Request):
+    if not check_api_key(login.api_key):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API key"
+        )
+    request.session.clear()
+    request.session["role"] = "admin"
+    return {"role": "admin"}
+
+
+@app.post("/auth/logout", dependencies=[Depends(require_web_client)])
+def sign_out(request: Request):
+    request.session.clear()
+    return {"message": "Signed out"}
+
+
+@app.get("/auth/me", response_model=Me, response_model_exclude_none=True)
+def who_am_i(role: str = Depends(require_auth),
+             conn = Depends(get_db)
+             ):
+    if role == "demo":
+        return {"role": role, "demo_analyses_left": demo_analyses_left(conn)}
+    return {"role": role}
+
+
+@app.post("/incidents")
 def create_incident(incident: Incident,
+                    role: str = Depends(require_auth),
                     conn = Depends(get_db),
                     embeddings = Depends(get_embeddings)
                     ):
+    # Checked before embedding so a refused request costs no Voyage call
+    if role == "demo":
+        ensure_demo_can_create(conn, incident.description)
 
     embedding = embed_for_storage(embeddings, incident.description)
 
@@ -91,10 +248,10 @@ def create_incident(incident: Incident,
         with conn.cursor() as cursor:
             cursor.execute(
                 """ 
-                    INSERT INTO incidents (incident_id, description, embedding)
-                    VALUES (%s, %s, %s::vector)
+                    INSERT INTO incidents (incident_id, description, embedding, created_by)
+                    VALUES (%s, %s, %s::vector, %s)
                 """,
-                (incident.incident_id, incident.description, embedding)
+                (incident.incident_id, incident.description, embedding, role)
             )
     except UniqueViolation:
         raise HTTPException(
@@ -111,30 +268,114 @@ def create_incident(incident: Incident,
         "description": incident.description
     }
 
-@app.get("/incidents", response_model=list[IncidentResponse], dependencies=[Depends(require_api_key)])
+# Each incident with the status of its newest analysis (empty when it has none)
+INCIDENTS_WITH_LATEST_STATUS = """
+    SELECT i.id, i.incident_id, i.description, a.status AS latest_status
+    FROM incidents i
+    LEFT JOIN LATERAL (
+        SELECT status
+        FROM incident_analyses
+        WHERE incident_id = i.incident_id
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+    ) a ON true
+"""
+
+@app.get("/incidents", response_model=list[IncidentResponse], dependencies=[Depends(require_auth)])
 def get_incidents(conn= Depends(get_db)):
-    with conn.cursor() as cursor:
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(INCIDENTS_WITH_LATEST_STATUS + " ORDER BY i.id DESC")
+        return cursor.fetchall()
+
+
+@app.get("/incidents/{incident_id}", response_model=IncidentResponse, dependencies=[Depends(require_auth)])
+def get_incident(incident_id: str,
+                 conn = Depends(get_db)
+                 ):
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(INCIDENTS_WITH_LATEST_STATUS + " WHERE i.incident_id = %s", (incident_id,))
+        incident = cursor.fetchone()
+
+    if incident is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Incident not found"
+        )
+    return incident
+
+
+@app.get("/incidents/{incident_id}/analyses", response_model=list[AnalysisRecord],
+         dependencies=[Depends(require_auth)])
+def get_incident_analyses(incident_id: str,
+                          conn = Depends(get_db)
+                          ):
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("SELECT 1 AS found FROM incidents WHERE incident_id = %s", (incident_id,))
+        if cursor.fetchone() is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Incident not found"
+            )
+
         cursor.execute(
-            "SELECT id, incident_id,description FROM incidents"
+            """
+            SELECT thread_id, status, probable_cause, suggested_steps, evidence,
+                   similar_incidents, reviewer_comment, requested_by, decided_by,
+                   created_at, reviewed_at
+            FROM incident_analyses
+            WHERE incident_id = %s
+            ORDER BY created_at DESC, id DESC
+            """,
+            (incident_id,)
         )
         rows = cursor.fetchall()
 
     return [
         {
-            "id": row[0],
-            "incident_id": row[1],
-            "description": row[2]
+            "thread_id": row["thread_id"],
+            "status": row["status"],
+            "analysis": {
+                "probable_cause": row["probable_cause"],
+                "suggested_steps": row["suggested_steps"],
+                "evidence": row["evidence"],
+            },
+            "similar_incidents": row["similar_incidents"],
+            "reviewer_comment": row["reviewer_comment"],
+            "requested_by": row["requested_by"],
+            "decided_by": row["decided_by"],
+            "created_at": row["created_at"],
+            "reviewed_at": row["reviewed_at"],
         }
         for row in rows
     ]
 
 
-@app.put("/incidents/{incident_id}", dependencies=[Depends(require_api_key)])
+@app.get("/analyses", response_model=list[PendingAnalysis], dependencies=[Depends(require_auth)])
+def get_analyses(status: Literal["pending"],
+                 conn = Depends(get_db)
+                 ):
+    # Only the queue of analyses waiting for a decision exists for now
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT a.thread_id, a.incident_id, i.description, a.probable_cause, a.created_at
+            FROM incident_analyses a
+            JOIN incidents i ON i.incident_id = a.incident_id
+            WHERE a.status = 'pending'
+            ORDER BY a.created_at, a.id
+            """
+        )
+        return cursor.fetchall()
+
+
+@app.put("/incidents/{incident_id}")
 def update_incident(incident_id: str, 
                     incident: IncidentUpdate,
+                    role: str = Depends(require_auth),
                     conn = Depends(get_db),
                     embeddings = Depends(get_embeddings)
                     ):
+    ensure_not_demo(role)
 
     embedding = embed_for_storage(embeddings, incident.description)
 
@@ -162,10 +403,13 @@ def update_incident(incident_id: str,
     "description": incident.description
     }
 
-@app.delete("/incidents/{incident_id}", dependencies=[Depends(require_api_key)])
+@app.delete("/incidents/{incident_id}")
 def delete_incident(incident_id: str,
+                    role: str = Depends(require_auth),
                     conn= Depends(get_db)
                     ):
+    ensure_not_demo(role)
+
     with conn.cursor() as cursor:
         cursor.execute(
             """
@@ -188,8 +432,9 @@ def delete_incident(incident_id: str,
         "incident_id": incident_id
     }
 
-@app.post("/incidents/{incident_id}/analyze", response_model=AnalysisPending, dependencies=[Depends(require_api_key)])
+@app.post("/incidents/{incident_id}/analyze", response_model=AnalysisPending)
 def analyze_incident(incident_id: str,
+                     role: str = Depends(require_auth),
                      conn = Depends(get_db),
                      checkpointer = Depends(get_checkpointer),
                      model = Depends(get_chat_model),
@@ -206,6 +451,10 @@ def analyze_incident(incident_id: str,
                 detail="Incident not found"
             )
 
+    # Checked before the agent runs so a refused request costs no model call
+    if role == "demo":
+        ensure_demo_can_analyze(conn)
+
     thread_id = str(uuid4())
     config = {
         "configurable": {"thread_id": thread_id},
@@ -219,6 +468,7 @@ def analyze_incident(incident_id: str,
     result = graph.invoke(
         {
             "incident_id": incident_id,
+            "requested_by": role,
             "messages": [HumanMessage(f"Analyze incident {incident_id}")],
         },
         config,
@@ -230,9 +480,10 @@ def analyze_incident(incident_id: str,
         "analysis": result["__interrupt__"][0].value["analysis"],
     }
 
-@app.post("/analyses/{thread_id}/decision", response_model=DecisionResponse, dependencies=[Depends(require_api_key)])
+@app.post("/analyses/{thread_id}/decision", response_model=DecisionResponse)
 def decide_analysis(thread_id: str,
                     decision: Decision,
+                    role: str = Depends(require_auth),
                     conn = Depends(get_db),
                     checkpointer = Depends(get_checkpointer),
                     model = Depends(get_chat_model),
@@ -253,8 +504,8 @@ def decide_analysis(thread_id: str,
             detail="Analysis already decided"
         )
 
-    graph.invoke(
-        Command(resume=decision.model_dump()),
+    result = graph.invoke(
+        Command(resume={**decision.model_dump(), "decided_by": role}),
         {
             **config,
             "run_name": "decide_analysis",
@@ -265,6 +516,13 @@ def decide_analysis(thread_id: str,
             },
         },
     )
+
+    # The decision lost a race (someone decided first) or the analysis has no pending row
+    if not result.get("saved"):
+        raise HTTPException(
+            status_code=409,
+            detail="Analysis already decided"
+        )
 
     return {
         "thread_id": thread_id,

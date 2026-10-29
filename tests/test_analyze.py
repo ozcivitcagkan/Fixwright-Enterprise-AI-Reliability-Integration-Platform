@@ -88,7 +88,7 @@ def start_analysis(client):
 def saved_analyses(db, thread_id):
     return db.execute(
         """
-        SELECT status, reviewer_comment, probable_cause
+        SELECT status, reviewer_comment, probable_cause, requested_by, decided_by
         FROM incident_analyses
         WHERE thread_id = %s
         """,
@@ -96,7 +96,21 @@ def saved_analyses(db, thread_id):
     ).fetchall()
 
 
-def test_analyze_runs_tools_and_returns_pending_analysis(client, db):
+def reviewed_at(db, thread_id):
+    return db.execute(
+        "SELECT reviewed_at FROM incident_analyses WHERE thread_id = %s",
+        (thread_id,),
+    ).fetchone()[0]
+
+
+def similar_incidents(db, thread_id):
+    return db.execute(
+        "SELECT similar_incidents FROM incident_analyses WHERE thread_id = %s",
+        (thread_id,),
+    ).fetchone()[0]
+
+
+def test_analyze_runs_tools_and_stores_pending_analysis(client, db):
     create_incident(client, "INC-101", "Nightly payroll ETL job failed with a database timeout")
     create_incident(client, "INC-102", "Payroll ETL job timed out; database CPU at 95 percent")
     create_incident(client, "INC-103", "Login page returns HTTP 500")
@@ -111,7 +125,14 @@ def test_analyze_runs_tools_and_returns_pending_analysis(client, db):
     assert body["status"] == "pending_approval"
     assert body["analysis"] == ANALYSIS.model_dump()
     assert body["thread_id"]
-    assert saved_analyses(db, body["thread_id"]) == []
+    assert saved_analyses(db, body["thread_id"]) == [
+        ("pending", None, ANALYSIS.probable_cause, "api", None)
+    ]
+    assert reviewed_at(db, body["thread_id"]) is None
+
+    found = similar_incidents(db, body["thread_id"])
+    assert [item["incident_id"] for item in found] == ["INC-102"]
+    assert found[0]["has_approved_analysis"] is False
 
     search_line = search_result_line(fake_model)
     assert "INC-102" in search_line
@@ -121,7 +142,7 @@ def test_analyze_runs_tools_and_returns_pending_analysis(client, db):
 
 
 @pytest.mark.parametrize("approved", [True, False])
-def test_search_shows_only_approved_analyses_of_similar_incidents(client, approved):
+def test_search_shows_only_approved_analyses_of_similar_incidents(client, db, approved):
     create_incident(client, "INC-101", "Nightly payroll ETL job failed with a database timeout")
     create_incident(client, "INC-102", "Payroll ETL job timed out; database CPU at 95 percent")
 
@@ -131,11 +152,13 @@ def test_search_shows_only_approved_analyses_of_similar_incidents(client, approv
 
     fake_model = make_search_model()
     app.dependency_overrides[get_chat_model] = lambda: fake_model
-    client.post("/incidents/INC-101/analyze")
+    new_thread_id = client.post("/incidents/INC-101/analyze").json()["thread_id"]
 
     search_line = search_result_line(fake_model)
     assert "INC-102" in search_line
     assert (ANALYSIS.probable_cause in search_line) == approved
+    found = similar_incidents(db, new_thread_id)
+    assert found[0]["has_approved_analysis"] is approved
 
 
 def test_approving_saves_approved_analysis(client, db):
@@ -145,7 +168,10 @@ def test_approving_saves_approved_analysis(client, db):
 
     assert response.status_code == 200
     assert response.json() == {"thread_id": thread_id, "status": "approved"}
-    assert saved_analyses(db, thread_id) == [("approved", None, ANALYSIS.probable_cause)]
+    assert saved_analyses(db, thread_id) == [
+        ("approved", None, ANALYSIS.probable_cause, "api", "api")
+    ]
+    assert reviewed_at(db, thread_id) is not None
 
 
 def test_rejecting_saves_rejected_analysis_with_comment(client, db):
@@ -159,7 +185,7 @@ def test_rejecting_saves_rejected_analysis_with_comment(client, db):
     assert response.status_code == 200
     assert response.json() == {"thread_id": thread_id, "status": "rejected"}
     assert saved_analyses(db, thread_id) == [
-        ("rejected", "Evidence is too thin", ANALYSIS.probable_cause)
+        ("rejected", "Evidence is too thin", ANALYSIS.probable_cause, "api", "api")
     ]
 
 
@@ -171,7 +197,40 @@ def test_second_decision_returns_409(client, db):
 
     assert response.status_code == 409
     assert response.json() == {"detail": "Analysis already decided"}
-    assert saved_analyses(db, thread_id) == [("approved", None, ANALYSIS.probable_cause)]
+    assert saved_analyses(db, thread_id) == [
+        ("approved", None, ANALYSIS.probable_cause, "api", "api")
+    ]
+
+
+def test_decision_that_lost_the_race_returns_409(client, db):
+    thread_id = start_analysis(client)
+    # Someone else decided between this request's check and its update
+    db.execute(
+        """
+        UPDATE incident_analyses
+        SET status = 'approved', decided_by = 'admin', reviewed_at = now()
+        WHERE thread_id = %s
+        """,
+        (thread_id,),
+    )
+
+    response = client.post(f"/analyses/{thread_id}/decision", json={"approved": False})
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Analysis already decided"}
+    status, _, _, _, decided_by = saved_analyses(db, thread_id)[0]
+    assert (status, decided_by) == ("approved", "admin")
+
+
+def test_decision_without_pending_row_returns_409(client, db):
+    # An analysis that was waiting before pending rows were stored has no row
+    thread_id = start_analysis(client)
+    db.execute("DELETE FROM incident_analyses WHERE thread_id = %s", (thread_id,))
+
+    response = client.post(f"/analyses/{thread_id}/decision", json={"approved": True})
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Analysis already decided"}
 
 
 def test_decision_for_unknown_thread_returns_404(client):

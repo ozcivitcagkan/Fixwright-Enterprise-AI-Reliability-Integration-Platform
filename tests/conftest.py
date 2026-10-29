@@ -4,6 +4,10 @@ import zlib
 # Must run before the app imports below: app.db calls load_dotenv(), which would
 # otherwise turn on LangSmith tracing from .env and send fake test runs to LangSmith.
 os.environ["LANGSMITH_TRACING"] = "false"
+# The app refuses to start without a session secret. Tests also use the production
+# cookie flags (Secure), even when the local .env turns them off for plain http.
+os.environ["SESSION_SECRET"] = "test-session-secret-" + "x" * 32
+os.environ["SESSION_HTTPS_ONLY"] = "true"
 
 import pytest
 from dotenv import load_dotenv
@@ -20,6 +24,8 @@ load_dotenv()
 
 TEST_DB_NAME = os.getenv("TEST_DB_NAME", "fixwright_test")
 TEST_API_KEY = "test-api-key"
+# The header the web UI sends with every request that changes something
+WEB = {"X-Fixwright-Client": "web"}
 
 assert TEST_DB_NAME != os.getenv("DB_NAME"), "Tests must not run against the development database"
 
@@ -60,6 +66,23 @@ def reset_database():
     setup_database(TEST_DB_NAME)
 
 
+def sign_in(client, path, body=None):
+    """Signs in like the web UI does: no API key, the web header, a session cookie."""
+    client.headers.pop("X-API-Key", None)
+    client.headers.update(WEB)
+    response = client.post(path, json=body)
+    assert response.status_code == 200, response.text
+    return response
+
+
+def sign_in_demo(client):
+    return sign_in(client, "/auth/demo")
+
+
+def sign_in_admin(client):
+    return sign_in(client, "/auth/login", {"api_key": TEST_API_KEY})
+
+
 @pytest.fixture
 def client(monkeypatch):
     reset_database()
@@ -68,7 +91,8 @@ def client(monkeypatch):
     app.dependency_overrides[get_checkpointer] = override_get_checkpointer
     app.dependency_overrides[get_embeddings] = lambda: FakeEmbeddings()
 
-    with TestClient(app, headers={"X-API-Key": TEST_API_KEY}) as test_client:
+    # https, because the browser only sends the Secure session cookie back over https
+    with TestClient(app, base_url="https://testserver", headers={"X-API-Key": TEST_API_KEY}) as test_client:
         yield test_client
 
     app.dependency_overrides.clear()

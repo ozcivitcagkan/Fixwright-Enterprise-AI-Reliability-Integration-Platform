@@ -16,4 +16,4 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "python -m app.db && (python -m app.backfill_embeddings || echo 'Embedding backfill skipped') && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "python -m app.db && (python -m app.backfill_embeddings || echo 'Embedding backfill skipped') && (python -m app.demo || echo 'Demo cleanup skipped') && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
