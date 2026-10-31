@@ -17,6 +17,7 @@ from psycopg.rows import dict_row
 from starlette.middleware.sessions import SessionMiddleware
 import psycopg
 
+from app import frontend
 from app.agent.graph import AnalysisResult, build_agent
 from app.agent.llm import get_chat_model
 from app.auth import (
@@ -528,3 +529,8 @@ def decide_analysis(thread_id: str,
         "thread_id": thread_id,
         "status": "approved" if decision.approved else "rejected",
     }
+
+
+# The web app under /ui and the redirect from /. No API key: the pages hold no data,
+# the app asks the API for everything after the user signs in.
+app.include_router(frontend.router)
