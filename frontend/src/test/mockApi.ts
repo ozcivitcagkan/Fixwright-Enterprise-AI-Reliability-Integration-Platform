@@ -1,6 +1,6 @@
 import { expect, onTestFinished, vi } from 'vitest'
 
-type Reply = { status?: number; body?: unknown }
+type Reply = { status?: number; body?: unknown; hold?: Promise<unknown> }
 
 export type ApiCall = {
   method: string
@@ -12,6 +12,7 @@ export type ApiCall = {
 
 // Stands in for the Fixwright API in tests. Keys look like "GET /incidents" or
 // "GET /analyses?status=pending". A list of replies is used in order and the last one repeats.
+// A reply with "hold" waits until that promise resolves, so a test can look at the page mid-request.
 // A request without a matching key fails the test, so no test reaches a real server.
 export function mockApi(routes: Record<string, Reply | Reply[]>) {
   const calls: ApiCall[] = []
@@ -37,6 +38,7 @@ export function mockApi(routes: Record<string, Reply | Reply[]>) {
     const replies = Array.isArray(route) ? route : [route]
     const reply = replies[Math.min(used[key] ?? 0, replies.length - 1)]
     used[key] = (used[key] ?? 0) + 1
+    if (reply.hold) await reply.hold
     return new Response(JSON.stringify(reply.body ?? null), {
       status: reply.status ?? 200,
       headers: { 'Content-Type': 'application/json' },
