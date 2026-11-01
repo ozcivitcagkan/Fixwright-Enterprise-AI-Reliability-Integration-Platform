@@ -5,10 +5,12 @@ import { setUnauthorizedHandler } from '@/lib/api'
 import { HomePage } from '@/pages/HomePage'
 import { IncidentPage } from '@/pages/IncidentPage'
 import { LoginPage } from '@/pages/LoginPage'
+import { PrivacyPage } from '@/pages/PrivacyPage'
 
 // Paths are written without /ui; the router adds that prefix (basename)
 export const routes: RouteObject[] = [
   { path: '/login', element: <LoginPage /> },
+  { path: '/privacy', element: <PrivacyPage /> },
   {
     // Every page inside needs a session; RequireSession sends people without one to /login
     element: <RequireSession />,
