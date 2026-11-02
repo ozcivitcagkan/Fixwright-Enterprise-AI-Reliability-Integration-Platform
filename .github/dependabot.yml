@@ -1,5 +1,5 @@
 # Dependabot opens weekly PRs for outdated dependencies.
-# Every PR runs the "test" workflow before it can be merged.
+# Every PR runs the Tests workflow (backend "test" and "frontend" jobs) before it can be merged.
 version: 2
 
 updates:
@@ -23,7 +23,27 @@ updates:
           - "patch"
     open-pull-requests-limit: 5
 
-  # Base image in the Dockerfile
+  # Web app packages in frontend/package.json
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      timezone: "Europe/Istanbul"
+    # Wait 7 days after a release before proposing it (supply chain safety)
+    cooldown:
+      default-days: 7
+    # Minor and patch updates come as one PR; major updates come one by one
+    groups:
+      npm-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 5
+
+  # Base images in the Dockerfile
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
@@ -36,6 +56,10 @@ updates:
         update-types:
           - "version-update:semver-major"
           - "version-update:semver-minor"
+      # Node major upgrades are done by hand, together with the CI workflow (only even majors are LTS)
+      - dependency-name: "node"
+        update-types:
+          - "version-update:semver-major"
 
   # Actions used in .github/workflows
   - package-ecosystem: "github-actions"

@@ -1,3 +1,15 @@
+# Stage 1: build the web app with Node. Only the built files leave this stage.
+FROM node:26.13.0-slim AS frontend
+
+WORKDIR /frontend
+
+COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
+# Stage 2: the Python image that runs the API and serves the built web app
 FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -10,6 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY db ./db
+COPY --from=frontend /frontend/dist ./frontend/dist
 
 RUN useradd --create-home appuser
 USER appuser
