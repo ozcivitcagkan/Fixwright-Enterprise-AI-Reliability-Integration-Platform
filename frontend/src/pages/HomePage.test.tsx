@@ -90,6 +90,30 @@ test('new incident is created and opened', async () => {
   expect(posts.map((call) => call.body)).toEqual([{ incident_id: 'INC-9', description: 'Disk full' }])
 })
 
+test('create button shows progress while the incident is saved', async () => {
+  let finish: () => void = () => {}
+  const hold = new Promise<void>((resolve) => {
+    finish = () => resolve()
+  })
+  homeApi({
+    'POST /incidents': { body: { message: 'Incident received', incident_id: 'INC-9', description: 'Disk full' }, hold },
+    'GET /incidents/INC-9': { body: incident('INC-9', null, 9) },
+    'GET /incidents/INC-9/analyses': { body: [] },
+  })
+  const { user } = renderApp('/ui/')
+
+  await user.click(await screen.findByRole('button', { name: 'New incident' }))
+  const dialog = screen.getByRole('dialog')
+  await user.type(within(dialog).getByLabelText('Incident ID'), 'INC-9')
+  await user.type(within(dialog).getByLabelText('Description'), 'Disk full')
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }))
+
+  expect(await within(dialog).findByRole('button', { name: 'Creating…' })).toBeDisabled()
+  finish()
+
+  expect(await screen.findByRole('heading', { name: 'INC-9' })).toBeInTheDocument()
+})
+
 test('incident id with a slash is refused', async () => {
   const api = homeApi()
   const { user } = renderApp('/ui/')

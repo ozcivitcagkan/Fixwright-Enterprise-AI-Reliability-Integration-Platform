@@ -101,7 +101,7 @@ function NewIncidentForm({ role, onCreated }: { role: Role; onCreated: () => voi
       <ErrorMessage error={create.error} conflict="An incident with this ID already exists." />
 
       <Button type="submit" className="w-full" disabled={create.isPending}>
-        Create
+        {create.isPending ? 'Creating…' : 'Create'}
       </Button>
     </form>
   )
