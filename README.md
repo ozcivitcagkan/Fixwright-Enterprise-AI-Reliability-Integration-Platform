@@ -6,16 +6,41 @@ Fixwright is an enterprise-focused platform for incident management, system inte
 
 ## Live Demo
 
-The API is deployed at **https://fixwright.onrender.com**
+The app is deployed at **https://fixwright.onrender.com**
 
+- Web interface: [fixwright.onrender.com](https://fixwright.onrender.com) opens the sign-in page; **Try the demo** needs no account. See [Web Interface](#web-interface).
 - Interactive API docs: [fixwright.onrender.com/docs](https://fixwright.onrender.com/docs)
 - Public health check: [fixwright.onrender.com/health](https://fixwright.onrender.com/health)
 - Every other endpoint needs either an API key in the `X-API-Key` header (a demo key is available on request) or a signed-in browser session. See [Authentication](#authentication).
 - Hosting: Render (Docker container, Frankfurt) with a Neon serverless PostgreSQL database. Every merge to `main` is deployed automatically.
 - The demo runs on free tiers, so the first request after 15 minutes of inactivity can take up to a minute while the service wakes up.
 
+## Web Interface
+
+![Fixwright web interface: an incident with an analysis waiting for a decision](docs/images/web-interface.png)
+
+A small web app for the whole flow, without curl or Swagger: open an incident, let the agent analyze it, and approve or reject the result.
+
+- **Sign in:** **Try the demo** starts a demo session without an account (up to 30 analyses and 20 new incidents per day for all visitors together). **Sign in with API key** starts an admin session.
+- **Home:** analyses waiting for a decision come first, then the list of incidents with the status of their latest analysis, and one **New incident** button.
+- **Incident page:** one main action at a time. **Analyze** while there is no analysis, **Approve** or **Reject** (with an optional comment) while one is waiting, and the decision once it is made. Similar past incidents are shown as **Strong match** or **Possible match**; the raw similarity score is in a tooltip. Earlier analyses are folded away under **Earlier analyses**.
+- **Privacy notice** at `/ui/privacy`, linked from the sign-in page: what is stored, where, for how long, and that the only cookie is the session cookie.
+
+How it is built:
+
+- React, TypeScript, and Vite in `frontend/`, styled with Tailwind CSS and shadcn/ui, with TanStack Query for API calls and React Router for pages.
+- FastAPI serves the built files under `/ui/` (`app/frontend.py`), and `/` redirects there. Any unknown path under `/ui/` returns the app, so links such as `/ui/incidents/INC-101` work after a refresh; a missing file under `/ui/assets/` returns `404`. Built files have content hashes in their names and are cached for a year; `index.html` is checked on every visit, so a new deploy shows up at once.
+- The app and the API share one origin, so there is no CORS configuration. The app signs in with the session cookie and sends the `X-Fixwright-Client: web` header on every request (see [Authentication](#authentication)). When the session ends, the next request sends the user to the sign-in page with "Your session expired. Sign in again."
+- All incident text and model output is shown as plain text, never as HTML. An ESLint rule forbids `dangerouslySetInnerHTML`.
+- The strict Content-Security-Policy applies to the app too: no inline scripts, no inline styles, no files from other sites (the Geist font is bundled). One visible effect: the dialog's scroll lock injects an inline style that the policy blocks, so the page behind an open dialog is not locked in every case.
+- Light and dark mode follow the operating system setting.
+- Tests: Vitest with React Testing Library render each page with a mocked API and check the behavior that matters (one request when Analyze is clicked twice, HTML shown as text, encoded incident IDs, the session-expired redirect). CI also runs ESLint, the TypeScript type check, and a production build.
+
+The full design is in [docs/design/frontend-v1.md](docs/design/frontend-v1.md).
+
 ## Current Features
 
+- Web interface (React + TypeScript) for creating, analyzing, and approving incidents, with a one-click demo
 - REST API built with FastAPI
 - PostgreSQL database integration
 - Incident CRUD operations
@@ -31,10 +56,10 @@ The API is deployed at **https://fixwright.onrender.com**
 - Pydantic request and response validation
 - HTTP error handling
 - Environment-based configuration
-- Docker image and Docker Compose setup (API + PostgreSQL with pgvector)
-- Automated tests with pytest against a real PostgreSQL test database
-- CI with GitHub Actions on every pull request
-- Dependabot for Python packages, the Docker base image, and GitHub Actions
+- Docker image and Docker Compose setup (API + PostgreSQL with pgvector); the web app is built in a separate Node stage
+- Automated tests with pytest against a real PostgreSQL test database, and Vitest for the web app
+- CI with GitHub Actions on every pull request: backend tests, and lint, type check, tests, and build for the web app
+- Dependabot for Python packages, npm packages, the Docker base images, and GitHub Actions
 
 ## Tech Stack
 
@@ -50,6 +75,14 @@ The API is deployed at **https://fixwright.onrender.com**
 - LangSmith (tracing)
 - MCP (Model Context Protocol) Python SDK
 - pytest
+- TypeScript
+- React
+- Vite
+- Tailwind CSS and shadcn/ui
+- TanStack Query
+- React Router
+- Vitest and React Testing Library
+- Node.js 26 (build only)
 - Docker
 - GitHub Actions
 - Git
@@ -65,6 +98,13 @@ The API is deployed at **https://fixwright.onrender.com**
 6. Optional: delete demo data older than 7 days: `python -m app.demo`
 7. Run the API: `uvicorn app.main:app --reload`
 
+Web interface (needs Node.js 26):
+
+1. Install the packages exactly as locked: `cd frontend && npm ci` (`frontend/.npmrc` stops packages from running install scripts).
+2. Start the development server: `npm run dev`, then open `http://localhost:5173/ui/`. It forwards API requests to the API on port 8000, so the browser sees one origin, as in production.
+3. Checks: `npm run lint`, `npm run typecheck`, and `npm test`.
+4. Build: `npm run build` writes `frontend/dist`, which the API then serves at `http://localhost:8000/ui/`.
+
 ## Run with Docker
 
 The API and PostgreSQL (with pgvector) can run together with Docker Compose. Only `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `FIXWRIGHT_API_KEY`, and `SESSION_SECRET` are read from `.env`; the database settings and `SESSION_HTTPS_ONLY=false` are defined in `docker-compose.yml`.
@@ -74,7 +114,8 @@ docker compose up --build
 ```
 
 - On startup, the container creates the tables (`python -m app.db`), fills in missing incident embeddings (`python -m app.backfill_embeddings`), deletes old demo data (`python -m app.demo`), and then starts the API on port 8000. All three setup steps are safe to run every time. If the backfill or the demo cleanup fails (for example when Voyage AI is unavailable), that step is skipped and the API still starts.
-- The image runs as a non-root user. `.env`, tests, and local files are kept out of the image by `.dockerignore`.
+- The web interface is at `http://localhost:8000/ui/`. The Dockerfile has two stages: a Node stage installs the locked packages with `npm ci` and builds the app, and the Python stage copies only the built `frontend/dist`. The final image contains no Node.js and no `node_modules`.
+- The image runs as a non-root user. `.dockerignore` keeps `.env`, `.git`, the virtual environment, caches, tests, and the local `frontend/node_modules` and `frontend/dist` out of the build.
 - Stop with `Ctrl+C`, then run `docker compose down`. Data stays in the `pgdata` volume.
 
 
@@ -128,6 +169,8 @@ Every response carries `Content-Security-Policy` (only files from this site may 
 
 | Method | Endpoint | Description |
 |---|---|---|
+| GET | `/` | Redirects to the web interface at `/ui/`, public |
+| GET | `/ui/...` | The web interface (pages and built files), public; the pages hold no data |
 | GET | `/health` | Health check (also checks the database), public |
 | POST | `/auth/demo` | Start a demo session (role `demo`), no key needed |
 | POST | `/auth/login` | Start an admin session with the API key |
@@ -376,4 +419,4 @@ The platform is being developed toward an enterprise AI reliability architecture
 
 Active Development
 
-The core API, the database layer, the AI incident analysis agent, the human approval workflow with pending analyses, semantic search over past incidents with pgvector, API key and session authentication with a public demo mode, and an MCP server for AI assistants are implemented.
+The core API, the database layer, the AI incident analysis agent, the human approval workflow with pending analyses, semantic search over past incidents with pgvector, API key and session authentication with a public demo mode, an MCP server for AI assistants, and a web interface are implemented.

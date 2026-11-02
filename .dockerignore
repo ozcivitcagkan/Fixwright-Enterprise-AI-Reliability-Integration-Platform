@@ -1,0 +1,10 @@
+# Keep secrets, git history and local-only files out of the Docker build context
+.env
+.git
+.venv
+**/__pycache__/
+.pytest_cache/
+playground/
+tests/
+frontend/node_modules/
+frontend/dist/
