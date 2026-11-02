@@ -42,6 +42,13 @@ updates:
           - "minor"
           - "patch"
     open-pull-requests-limit: 5
+    ignore:
+      # typescript-eslint supports only a range of TypeScript versions (8.72: below 6.1),
+      # so TypeScript minor and major upgrades are done by hand, together with typescript-eslint
+      - dependency-name: "typescript"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
 
   # Base images in the Dockerfile
   - package-ecosystem: "docker"
