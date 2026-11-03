@@ -6,7 +6,7 @@
 
 **Try it:** open [fixwright.onrender.com](https://fixwright.onrender.com) and click **Try the demo** (no account needed). The demo runs on free tiers, so the first request can take up to a minute while the service wakes up.
 
-![Fixwright web interface: an incident with an analysis waiting for a decision](docs/images/web-interface.png)
+![Fixwright demo: create an incident, let the agent analyze it, review similar past incidents, approve the result](docs/images/fixwright-demo.gif)
 
 ## Highlights
 
@@ -49,6 +49,8 @@ The app is deployed at **https://fixwright.onrender.com**
 ## Web Interface
 
 A small web app for the whole flow, without curl or Swagger: open an incident, let the agent analyze it, and approve or reject the result.
+
+![Fixwright web interface: an incident with an analysis waiting for a decision](docs/images/web-interface.png)
 
 - **Sign in:** **Try the demo** starts a demo session without an account (up to 30 analyses and 20 new incidents per day for all visitors together). **Sign in with API key** starts an admin session.
 - **Home:** analyses waiting for a decision come first, then the list of incidents with the status of their latest analysis, and one **New incident** button.
