@@ -1,8 +1,39 @@
-# Fixwright Enterprise AI Reliability & Integration Platform.
+# Fixwright: AI Incident Analysis with Human Approval
 
 [![Tests](https://github.com/ozcivitcagkan/Fixwright-Enterprise-AI-Reliability-Integration-Platform/actions/workflows/tests.yml/badge.svg)](https://github.com/ozcivitcagkan/Fixwright-Enterprise-AI-Reliability-Integration-Platform/actions/workflows/tests.yml)
 
-Fixwright is an enterprise-focused platform for incident management, system integrations, reliability workflows, and AI-assisted operational automation.
+**An AI agent analyzes IT incidents. A person decides.** When an incident comes in, a LangGraph agent reads it, searches past incidents by meaning (RAG with pgvector), and writes a structured analysis with Claude: probable cause, suggested steps, and evidence. The analysis is stored as pending and becomes approved or rejected only through a person's decision. Only approved analyses are ever reused as evidence for new incidents.
+
+**Try it:** open [fixwright.onrender.com](https://fixwright.onrender.com) and click **Try the demo** (no account needed). The demo runs on free tiers, so the first request can take up to a minute while the service wakes up.
+
+![Fixwright web interface: an incident with an analysis waiting for a decision](docs/images/web-interface.png)
+
+## Highlights
+
+- **Human in the loop by design:** the agent pauses with LangGraph `interrupt()` and its state is kept in PostgreSQL, so the decision can come hours later or after a restart. When two people decide at the same time, the first decision wins and the second gets `409`.
+- **Only approved knowledge is reused:** pending and rejected analyses never reach the agent. This is enforced in the search query, covered by tests, and checked again in the evaluation.
+- **Measured, not guessed:** the full agent passed 60/60 checks over 3 runs (code checks plus an LLM judge), and the similarity threshold was chosen with a retrieval evaluation (precision 0.71, recall 0.94 at 0.45).
+- **Production basics:** Docker on Render with Neon PostgreSQL, deployed on every merge. CI runs backend tests against a real PostgreSQL database, plus lint, type check, tests, and build for the web app; both jobs must pass before anything reaches `main`.
+- **Secure by default:** API key or signed session cookie with three roles, a CSRF header for browser requests, a strict Content-Security-Policy, settings that fail closed, and a public demo with daily limits and automatic deletion after 7 days.
+- **Usable from AI assistants:** an MCP server gives assistants such as Claude Desktop four hand-picked tools, while the approval decision still stays with a person.
+
+## How It Works
+
+```mermaid
+flowchart LR
+    web["Web app (React)"] --> api["FastAPI"]
+    mcp["AI assistant (MCP)"] --> api
+    api --> agent["LangGraph agent with Claude"]
+    agent -- "read-only tools" --> db[("PostgreSQL + pgvector")]
+    agent -. "embeddings" .-> voyage["Voyage AI"]
+    agent -- "pending analysis" --> person{"Person approves or rejects"}
+    person -- "decision" --> db
+```
+
+1. A new incident is saved together with an embedding of its description.
+2. **Analyze** starts the agent. It reads the incident, finds similar past incidents, and reuses their approved analyses as evidence.
+3. The agent writes a structured analysis, stores it as `pending`, and pauses.
+4. A person approves or rejects it in the web app, through the API, or through an AI assistant. Approved analyses become evidence for future incidents; rejected ones are kept only as an audit trail.
 
 ## Live Demo
 
@@ -16,8 +47,6 @@ The app is deployed at **https://fixwright.onrender.com**
 - The demo runs on free tiers, so the first request after 15 minutes of inactivity can take up to a minute while the service wakes up.
 
 ## Web Interface
-
-![Fixwright web interface: an incident with an analysis waiting for a decision](docs/images/web-interface.png)
 
 A small web app for the whole flow, without curl or Swagger: open an incident, let the agent analyze it, and approve or reject the result.
 
@@ -402,21 +431,17 @@ Example from a local run: asked to analyze INC-105, the assistant called `analyz
 Tests in `tests/test_mcp_server.py` call the tools through an in-memory MCP client. The HTTP client is replaced with the FastAPI test client and the chat model with the fake model, so the path from MCP tool to database is tested without network access or real model calls.
 
 
-## Architecture Roadmap
+## Known Limitations
 
-The platform is being developed toward an enterprise AI reliability architecture covering:
+- The evaluation sets are small (16 incidents, 10 search queries, 4 agent scenarios), and the judge is the same model as the agent.
+- There is one API key with full access. Scoped keys and personal accounts come with single sign-on.
+- Demo limits are counted without a lock, so a burst of parallel requests can go slightly over the daily limit.
+- Signing out ends the session in the browser, but a copied session cookie stays valid until it expires (signed cookie, up to 8 hours).
+- The free tier sleeps when idle, so the first request after a pause is slow.
 
-- AI-assisted incident analysis
-- RAG-based knowledge retrieval
-- Enterprise system integrations
-- Reliable AI workflows
-- Automated validation and testing
-- Containerized services
-- CI/CD pipelines
-- Cloud infrastructure
+## Next Steps
 
-## Status
-
-Active Development
-
-The core API, the database layer, the AI incident analysis agent, the human approval workflow with pending analyses, semantic search over past incidents with pgvector, API key and session authentication with a public demo mode, an MCP server for AI assistants, and a web interface are implemented.
+- Single sign-on (OpenID Connect) with personal accounts and roles.
+- A remote MCP endpoint on the live demo, protected by OAuth.
+- Larger evaluation sets built from real incidents, and a different judge model.
+- Merge the agent's last two model calls, which the traces show take most of the time.
