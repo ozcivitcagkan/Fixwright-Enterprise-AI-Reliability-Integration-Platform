@@ -447,3 +447,9 @@ Tests in `tests/test_mcp_server.py` call the tools through an in-memory MCP clie
 - A remote MCP endpoint on the live demo, protected by OAuth.
 - Larger evaluation sets built from real incidents, and a different judge model.
 - Merge the agent's last two model calls, which the traces show take most of the time.
+
+## License
+
+Copyright (c) 2026 Çağkan Özçivit. All rights reserved.
+
+The source code is public so it can be read and reviewed. It is not licensed for reuse: please contact me before copying, modifying, or using any part of it, including commercially.
